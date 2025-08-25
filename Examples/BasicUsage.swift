@@ -1,3 +1,11 @@
+//
+//  BasicUsage.swift
+//  SwiftChatCompletionsDSL
+//
+//  Created by Richard Naszcyniec on 6/23/25.
+//  Code assisted by AI
+//
+
 import Foundation
 import SwiftChatCompletionsDSL
 

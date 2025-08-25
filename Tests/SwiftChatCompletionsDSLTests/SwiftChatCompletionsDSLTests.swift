@@ -1,3 +1,11 @@
+//
+//  SwiftChatCompletionsDSLTests.swift
+//  SwiftChatCompletionsDSL
+//
+//  Created by Richard Naszcyniec on 6/23/25.
+//  Code assisted by AI
+//
+
 import Foundation
 import Testing
 @testable import SwiftChatCompletionsDSL
