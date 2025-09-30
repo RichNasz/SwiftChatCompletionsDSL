@@ -721,6 +721,138 @@ public struct Stop: ChatConfigParameter {
 	}
 }
 
+/// Configures the timeout for individual HTTP requests.
+///
+/// Request timeout controls how long to wait for the server to respond to individual HTTP requests.
+/// This timeout applies to each request attempt and does not include connection establishment time
+/// or time spent reading the response body.
+///
+/// ## How Request Timeout Works
+/// The request timeout determines how long the HTTP client will wait for:
+/// - Server to acknowledge the request
+/// - Server to begin sending response data
+/// - Each individual chunk of response data (for streaming)
+///
+/// ## Timeout Guidelines
+/// - **Quick requests (10-30s)**: For simple queries with fast expected responses
+/// - **Standard requests (30-120s)**: For typical LLM interactions
+/// - **Long requests (120-900s)**: For complex tasks like document generation
+///
+/// ## Relationship to Resource Timeout
+/// Request timeout should typically be shorter than resource timeout:
+/// - Request timeout: Individual HTTP request timeout
+/// - Resource timeout: Total time for complete resource loading (including retries)
+///
+/// ## Example Usage
+/// ```swift
+/// // Quick response expected
+/// try RequestTimeout(30)
+///
+/// // Standard conversation
+/// try RequestTimeout(120)
+///
+/// // Long document generation
+/// try RequestTimeout(600)
+/// ```
+///
+/// ## Best Practices
+/// - Set based on expected response complexity
+/// - Consider model speed and server load
+/// - Use shorter timeouts for user-facing interactions
+/// - Use longer timeouts for background processing
+/// - Always pair with appropriate ``ResourceTimeout``
+///
+/// - Note: Value must be between 10 and 900 seconds. Values outside this range will throw ``LLMError/invalidValue(_:)``.
+public struct RequestTimeout: ChatConfigParameter {
+	/// The request timeout value in seconds (10-900 seconds)
+	public let value: TimeInterval
+
+	/// Creates a request timeout configuration parameter.
+	/// - Parameter value: Timeout value in seconds (must be between 10 and 900)
+	/// - Throws: ``LLMError/invalidValue(_:)`` if value is outside valid range
+	public init(_ value: TimeInterval) throws {
+		guard value >= 10 && value <= 900 else {
+			throw LLMError.invalidValue("Request timeout must be between 10 and 900 seconds, got \(value)")
+		}
+		self.value = value
+	}
+
+	public func apply(to request: inout ChatRequest) {
+		request.requestTimeout = value
+	}
+}
+
+/// Configures the timeout for complete resource loading operations.
+///
+/// Resource timeout controls the total time allowed for the complete loading of a resource,
+/// including connection establishment, request sending, response waiting, and complete data transfer.
+/// This timeout encompasses the entire lifecycle of the HTTP operation.
+///
+/// ## How Resource Timeout Works
+/// The resource timeout covers the entire duration of:
+/// - TCP connection establishment and SSL handshake
+/// - HTTP request transmission
+/// - Server processing time
+/// - Complete response data transfer
+/// - Any internal retries or redirects
+///
+/// ## Timeout Guidelines
+/// - **Quick operations (30-120s)**: For simple requests with minimal processing
+/// - **Standard operations (120-600s)**: For typical LLM conversations and responses
+/// - **Long operations (600-3600s)**: For complex document generation, analysis, or large responses
+///
+/// ## Relationship to Request Timeout
+/// Resource timeout should typically be longer than request timeout:
+/// - Resource timeout: Total operation timeout (includes connection overhead)
+/// - Request timeout: Individual HTTP request response timeout
+///
+/// Recommended ratio: Resource timeout ≥ Request timeout × 1.5-2.0
+///
+/// ## Example Usage
+/// ```swift
+/// // Quick operation with safety margin
+/// try ResourceTimeout(60)    // with RequestTimeout(30)
+///
+/// // Standard operation
+/// try ResourceTimeout(300)   // with RequestTimeout(120)
+///
+/// // Long operation for complex tasks
+/// try ResourceTimeout(1800)  // with RequestTimeout(600)
+/// ```
+///
+/// ## Best Practices
+/// - Always set higher than ``RequestTimeout``
+/// - Account for potential network issues and retries
+/// - Consider server load and processing complexity
+/// - Use conservative values for critical operations
+/// - Monitor actual response times to optimize settings
+///
+/// ## Use Cases
+/// - **Document generation**: High timeout for multi-page content creation
+/// - **Code analysis**: Extended timeout for complex code review tasks
+/// - **Data processing**: Long timeout for large dataset analysis
+/// - **Interactive chat**: Moderate timeout for conversational responses
+///
+/// - Note: Value must be between 30 and 3600 seconds. Values outside this range will throw ``LLMError/invalidValue(_:)``.
+public struct ResourceTimeout: ChatConfigParameter {
+	/// The resource timeout value in seconds (30-3600 seconds)
+	public let value: TimeInterval
+
+	/// Creates a resource timeout configuration parameter.
+	/// - Parameter value: Timeout value in seconds (must be between 30 and 3600)
+	/// - Throws: ``LLMError/invalidValue(_:)`` if value is outside valid range
+	public init(_ value: TimeInterval) throws {
+		guard value >= 30 && value <= 3600 else {
+			throw LLMError.invalidValue("Resource timeout must be between 30 and 3600 seconds, got \(value)")
+		}
+		self.value = value
+	}
+
+	public func apply(to request: inout ChatRequest) {
+		request.resourceTimeout = value
+	}
+}
+
 // MARK: - Tool Support (Future Extension)
 
 /// Defines a tool that the model can call to perform actions or retrieve information.
@@ -1370,6 +1502,10 @@ public struct ChatRequest: Encodable, Sendable {
 	public var stop: [String]?
 	/// List of tools the model may call
 	public var tools: [Tool]?
+	/// Request timeout for individual HTTP requests (in seconds)
+	public var requestTimeout: TimeInterval?
+	/// Resource timeout for complete resource loading (in seconds)
+	public var resourceTimeout: TimeInterval?
 	
 	/// Creates a new chat completion request using result builder syntax.
 	///
@@ -2095,9 +2231,24 @@ public actor LLMClient {
 		} catch {
 			throw LLMError.encodingFailed(error.localizedDescription)
 		}
-		
+
+		// Configure custom session if timeouts are specified
+		let sessionToUse: URLSession
+		if request.requestTimeout != nil || request.resourceTimeout != nil {
+			let config = URLSessionConfiguration.default.copy() as! URLSessionConfiguration
+			if let requestTimeout = request.requestTimeout {
+				config.timeoutIntervalForRequest = requestTimeout
+			}
+			if let resourceTimeout = request.resourceTimeout {
+				config.timeoutIntervalForResource = resourceTimeout
+			}
+			sessionToUse = URLSession(configuration: config)
+		} else {
+			sessionToUse = session
+		}
+
 		do {
-			let (data, response) = try await session.data(for: urlRequest)
+			let (data, response) = try await sessionToUse.data(for: urlRequest)
 			
 			if let httpResponse = response as? HTTPURLResponse {
 				switch httpResponse.statusCode {
@@ -2118,6 +2269,8 @@ public actor LLMClient {
 			}
 		} catch let error as LLMError {
 			throw error
+		} catch let urlError as URLError where urlError.code == .timedOut {
+			throw LLMError.networkError("Request timeout exceeded")
 		} catch {
 			throw LLMError.networkError(error.localizedDescription)
 		}
@@ -2250,8 +2403,23 @@ public actor LLMClient {
 					
 					let requestData = try JSONEncoder().encode(request)
 					urlRequest.httpBody = requestData
-					
-					let (asyncBytes, response) = try await session.bytes(for: urlRequest)
+
+					// Configure custom session if timeouts are specified
+					let sessionToUse: URLSession
+					if request.requestTimeout != nil || request.resourceTimeout != nil {
+						let config = URLSessionConfiguration.default.copy() as! URLSessionConfiguration
+						if let requestTimeout = request.requestTimeout {
+							config.timeoutIntervalForRequest = requestTimeout
+						}
+						if let resourceTimeout = request.resourceTimeout {
+							config.timeoutIntervalForResource = resourceTimeout
+						}
+						sessionToUse = URLSession(configuration: config)
+					} else {
+						sessionToUse = session
+					}
+
+					let (asyncBytes, response) = try await sessionToUse.bytes(for: urlRequest)
 					
 					if let httpResponse = response as? HTTPURLResponse {
 						switch httpResponse.statusCode {

@@ -262,6 +262,120 @@ func functionCallingExample() async throws {
 	}
 }
 
+/// Example demonstrating timeout configuration for different use cases
+@available(macOS 12.0, iOS 15.0, *)
+func timeoutConfigurationExample() async throws {
+	let client = try LLMClient(
+		baseURL: "https://api.openai.com/v1/chat/completions",
+		apiKey: "your-api-key-here"
+	)
+
+	// Example 1: Quick request with short timeout
+	print("=== Quick Request Example ===")
+	let quickRequest = try ChatRequest(model: "gpt-4o") {
+		try Temperature(0.3)
+		try MaxTokens(50)
+		try RequestTimeout(30)    // 30 seconds for quick response
+		try ResourceTimeout(60)   // 1 minute total
+	} messages: {
+		TextMessage(role: .user, content: "What is 2+2?")
+	}
+
+	do {
+		let response = try await client.complete(quickRequest)
+		if let content = response.choices.first?.message.content {
+			print("Quick response: \(content)")
+		}
+	} catch LLMError.networkError(let description) {
+		print("Network/timeout error: \(description)")
+	}
+
+	// Example 2: Standard conversation with moderate timeout
+	print("\n=== Standard Conversation Example ===")
+	let standardRequest = try ChatRequest(model: "gpt-4o") {
+		try Temperature(0.7)
+		try MaxTokens(200)
+		try RequestTimeout(120)   // 2 minutes for standard processing
+		try ResourceTimeout(300)  // 5 minutes total
+	} messages: {
+		TextMessage(role: .system, content: "You are a helpful programming assistant.")
+		TextMessage(role: .user, content: "Explain the difference between structs and classes in Swift.")
+	}
+
+	do {
+		let response = try await client.complete(standardRequest)
+		if let content = response.choices.first?.message.content {
+			print("Standard response: \(content)")
+		}
+	} catch LLMError.networkError(let description) {
+		print("Network/timeout error: \(description)")
+	}
+
+	// Example 3: Long document generation with extended timeout
+	print("\n=== Long Document Generation Example ===")
+	let longRequest = try ChatRequest(model: "gpt-4o") {
+		try Temperature(0.8)
+		try MaxTokens(1000)
+		try RequestTimeout(600)    // 10 minutes for complex generation
+		try ResourceTimeout(1200)  // 20 minutes total
+	} messages: {
+		TextMessage(role: .system, content: "You are a technical documentation writer.")
+		TextMessage(role: .user, content: "Write a comprehensive guide on Swift concurrency, including async/await, actors, and task groups.")
+	}
+
+	do {
+		let response = try await client.complete(longRequest)
+		if let content = response.choices.first?.message.content {
+			print("Long document response: \(content.prefix(200))...")
+		}
+	} catch LLMError.networkError(let description) {
+		print("Network/timeout error for long request: \(description)")
+	}
+
+	// Example 4: Streaming with timeout configuration
+	print("\n=== Streaming with Timeout Example ===")
+	let streamingRequest = try ChatRequest(model: "gpt-4o", stream: true) {
+		try Temperature(0.7)
+		try MaxTokens(300)
+		try RequestTimeout(180)   // 3 minutes for streaming
+		try ResourceTimeout(450)  // 7.5 minutes total
+	} messages: {
+		TextMessage(role: .user, content: "Write a short story about a robot learning to code.")
+	}
+
+	print("Streaming response: ", terminator: "")
+	let stream = client.stream(streamingRequest)
+
+	for await delta in stream {
+		if let content = delta.choices.first?.delta.content {
+			print(content, terminator: "")
+		}
+		if delta.choices.first?.finishReason != nil {
+			break
+		}
+	}
+	print("\nStreaming completed.")
+
+	// Example 5: Error handling for timeout scenarios
+	print("\n=== Timeout Error Handling Example ===")
+	let timeoutRequest = try ChatRequest(model: "gpt-4o") {
+		try Temperature(0.7)
+		try RequestTimeout(10)    // Very short timeout to demonstrate error handling
+		try ResourceTimeout(30)
+	} messages: {
+		TextMessage(role: .user, content: "Write a very long detailed analysis that will likely exceed the timeout.")
+	}
+
+	do {
+		let response = try await client.complete(timeoutRequest)
+		print("Unexpected success: \(response.choices.first?.message.content ?? "No content")")
+	} catch LLMError.networkError(let description) {
+		print("Expected timeout error: \(description)")
+	} catch {
+		print("Other error: \(error)")
+	}
+}
+
 // MARK: - Main execution examples
 
 @available(macOS 12.0, iOS 15.0, *)
@@ -291,7 +405,10 @@ struct ExampleRunner {
 			
 			print("\n6. Function Calling Example:")
 			try await functionCallingExample()
-			
+
+			print("\n7. Timeout Configuration Example:")
+			try await timeoutConfigurationExample()
+
 		} catch {
 			print("Example failed with error: \(error)")
 		}

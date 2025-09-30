@@ -368,3 +368,169 @@ import Testing
     #expect(request.messages.count == 1)
     #expect(request.messages[0].role == .user)
 }
+
+// MARK: - Timeout Configuration Tests
+
+@Test func testRequestTimeoutValidation() throws {
+    // Valid request timeouts
+    _ = try RequestTimeout(10)
+    _ = try RequestTimeout(120)
+    _ = try RequestTimeout(900)
+
+    // Invalid request timeouts - below minimum
+    #expect(throws: (any Error).self) {
+        try RequestTimeout(9)
+    }
+
+    // Invalid request timeouts - above maximum
+    #expect(throws: (any Error).self) {
+        try RequestTimeout(901)
+    }
+
+    // Invalid request timeouts - zero and negative
+    #expect(throws: (any Error).self) {
+        try RequestTimeout(0)
+    }
+    #expect(throws: (any Error).self) {
+        try RequestTimeout(-10)
+    }
+}
+
+@Test func testResourceTimeoutValidation() throws {
+    // Valid resource timeouts
+    _ = try ResourceTimeout(30)
+    _ = try ResourceTimeout(300)
+    _ = try ResourceTimeout(3600)
+
+    // Invalid resource timeouts - below minimum
+    #expect(throws: (any Error).self) {
+        try ResourceTimeout(29)
+    }
+
+    // Invalid resource timeouts - above maximum
+    #expect(throws: (any Error).self) {
+        try ResourceTimeout(3601)
+    }
+
+    // Invalid resource timeouts - zero and negative
+    #expect(throws: (any Error).self) {
+        try ResourceTimeout(0)
+    }
+    #expect(throws: (any Error).self) {
+        try ResourceTimeout(-30)
+    }
+}
+
+@Test func testTimeoutParametersApplyToRequest() throws {
+    let request = try ChatRequest(model: "test-model", config: {
+        try RequestTimeout(120)
+        try ResourceTimeout(300)
+        try Temperature(0.7)
+    }, messages: [
+        TextMessage(role: .user, content: "Test timeout configuration")
+    ])
+
+    #expect(request.requestTimeout == 120)
+    #expect(request.resourceTimeout == 300)
+    #expect(request.temperature == 0.7)
+    #expect(request.model == "test-model")
+}
+
+@Test func testTimeoutParametersIndividualApplication() throws {
+    // Test only request timeout
+    let requestOnly = try ChatRequest(model: "test-model", config: {
+        try RequestTimeout(60)
+    }, messages: [
+        TextMessage(role: .user, content: "Test")
+    ])
+
+    #expect(requestOnly.requestTimeout == 60)
+    #expect(requestOnly.resourceTimeout == nil)
+
+    // Test only resource timeout
+    let resourceOnly = try ChatRequest(model: "test-model", config: {
+        try ResourceTimeout(180)
+    }, messages: [
+        TextMessage(role: .user, content: "Test")
+    ])
+
+    #expect(resourceOnly.requestTimeout == nil)
+    #expect(resourceOnly.resourceTimeout == 180)
+}
+
+@Test func testTimeoutParametersWithOtherConfiguration() throws {
+    let request = try ChatRequest(model: "test-model", config: {
+        try Temperature(0.8)
+        try MaxTokens(200)
+        try RequestTimeout(90)
+        try TopP(0.9)
+        try ResourceTimeout(270)
+        try User("test-user")
+    }, messages: [
+        TextMessage(role: .user, content: "Complex configuration test")
+    ])
+
+    #expect(request.temperature == 0.8)
+    #expect(request.maxTokens == 200)
+    #expect(request.requestTimeout == 90)
+    #expect(request.topP == 0.9)
+    #expect(request.resourceTimeout == 270)
+    #expect(request.user == "test-user")
+}
+
+@Test func testNoTimeoutParametersLeaveRequestUnmodified() throws {
+    let request = try ChatRequest(model: "test-model", config: {
+        try Temperature(0.7)
+        try MaxTokens(100)
+    }, messages: [
+        TextMessage(role: .user, content: "No timeout test")
+    ])
+
+    #expect(request.requestTimeout == nil)
+    #expect(request.resourceTimeout == nil)
+    #expect(request.temperature == 0.7)
+    #expect(request.maxTokens == 100)
+}
+
+@Test func testTimeoutErrorMessages() {
+    // Test request timeout error messages
+    do {
+        _ = try RequestTimeout(5)
+        #expect(Bool(false), "Should have thrown error")
+    } catch LLMError.invalidValue(let message) {
+        #expect(message.contains("Request timeout must be between 10 and 900 seconds"))
+        #expect(message.contains("got 5"))
+    } catch {
+        #expect(Bool(false), "Wrong error type thrown")
+    }
+
+    // Test resource timeout error messages
+    do {
+        _ = try ResourceTimeout(20)
+        #expect(Bool(false), "Should have thrown error")
+    } catch LLMError.invalidValue(let message) {
+        #expect(message.contains("Resource timeout must be between 30 and 3600 seconds"))
+        #expect(message.contains("got 20"))
+    } catch {
+        #expect(Bool(false), "Wrong error type thrown")
+    }
+}
+
+@Test func testTimeoutConversationIntegration() throws {
+    var conversation = ChatConversation {
+        TextMessage(role: .system, content: "You are helpful.")
+    }
+
+    conversation.addUser(content: "Test with timeouts")
+
+    let request = try conversation.request(model: "test-model", config: {
+        try RequestTimeout(150)
+        try ResourceTimeout(450)
+        try Temperature(0.6)
+    })
+
+    #expect(request.requestTimeout == 150)
+    #expect(request.resourceTimeout == 450)
+    #expect(request.temperature == 0.6)
+    #expect(request.messages.count == 2)
+}
