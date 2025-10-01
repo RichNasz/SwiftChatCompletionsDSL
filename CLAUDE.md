@@ -33,6 +33,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - Manages HTTP requests to OpenAI-compatible endpoints
    - Supports both streaming and non-streaming responses
    - Uses `nonisolated` streaming method for better usability
+   - Configurable request and resource timeouts for reliable network operations
 
 2. **Result Builders**:
    - `@ChatBuilder`: Composes message sequences with control flow support
@@ -44,6 +45,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 
 4. **Configuration Structs**: Type-safe wrappers for API parameters with validation
    - `Temperature`, `MaxTokens`, `TopP`, `FrequencyPenalty`, `PresencePenalty`, etc.
+   - `RequestTimeout`, `ResourceTimeout` for controlling HTTP timeouts
    - Each validates input ranges and throws `LLMError.invalidValue(String)` on invalid values
 
 5. **Conversation Management**:
@@ -72,6 +74,12 @@ Custom `LLMError` enum covers:
 ### URL Handling
 - `baseURL` is treated as the complete endpoint URL (no path appending)
 - Examples: `https://api.openai.com/v1/chat/completions`, `https://custom-server.com/chat`
+
+### Timeout Configuration
+- **RequestTimeout**: Controls individual HTTP request timeouts (10-900 seconds)
+- **ResourceTimeout**: Controls complete resource loading timeouts (30-3600 seconds)
+- Timeouts are applied to both streaming and non-streaming requests
+- Custom URLSession configurations are created when timeouts are specified
 
 ### Streaming Support
 - Parses Server-Sent Events (SSE) format

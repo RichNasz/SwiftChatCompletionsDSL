@@ -78,6 +78,7 @@ public actor LLMClient {
 - **Async/await integration**: Natural Swift concurrency patterns
 - **Non-isolated streaming**: Streaming method is non-isolated for performance
 - **Resource management**: Proper URLSession lifecycle management
+- **Dynamic timeout configuration**: Custom URLSession configurations created when timeouts are specified
 
 ### Type-Safe Configuration System
 
@@ -90,16 +91,31 @@ public protocol ChatConfigParameter {
 
 public struct Temperature: ChatConfigParameter {
     public let value: Double
-    
+
     public init(_ value: Double) throws {
         guard (0.0...2.0).contains(value) else {
             throw LLMError.invalidValue("Temperature must be between 0.0 and 2.0, got \\(value)")
         }
         self.value = value
     }
-    
+
     public func apply(to request: inout ChatRequest) {
         request.temperature = value
+    }
+}
+
+public struct RequestTimeout: ChatConfigParameter {
+    public let value: TimeInterval
+
+    public init(_ value: TimeInterval) throws {
+        guard value >= 10 && value <= 900 else {
+            throw LLMError.invalidValue("Request timeout must be between 10 and 900 seconds, got \\(value)")
+        }
+        self.value = value
+    }
+
+    public func apply(to request: inout ChatRequest) {
+        request.requestTimeout = value
     }
 }
 ```
@@ -109,6 +125,33 @@ public struct Temperature: ChatConfigParameter {
 - **Composability**: Parameters can be mixed and matched freely
 - **Extensibility**: Easy to add custom parameters
 - **Type safety**: Compile-time checking of parameter types
+
+### Timeout Configuration Architecture
+
+The package implements sophisticated timeout handling through dynamic URLSession configuration:
+
+```swift
+// Configure custom session if timeouts are specified
+let sessionToUse: URLSession
+if request.requestTimeout != nil || request.resourceTimeout != nil {
+    let config = URLSessionConfiguration.default.copy() as! URLSessionConfiguration
+    if let requestTimeout = request.requestTimeout {
+        config.timeoutIntervalForRequest = requestTimeout
+    }
+    if let resourceTimeout = request.resourceTimeout {
+        config.timeoutIntervalForResource = resourceTimeout
+    }
+    sessionToUse = URLSession(configuration: config)
+} else {
+    sessionToUse = session
+}
+```
+
+**Timeout Types:**
+- **RequestTimeout**: Controls individual HTTP request timeouts (10-900 seconds)
+- **ResourceTimeout**: Controls complete resource loading timeouts (30-3600 seconds)
+- **Dynamic Configuration**: Custom URLSession instances created only when needed
+- **Both Modes**: Applied to both streaming and non-streaming requests
 
 ## JSON Serialization Strategy
 
@@ -272,6 +315,7 @@ struct CustomTimeout: ChatConfigParameter {
 - **Actor isolation**: Minimal actor hopping for better performance
 - **Lazy evaluation**: Configuration parameters are applied only when needed
 - **Resource pooling**: URLSession reuse for connection efficiency
+- **Dynamic timeout configuration**: Custom URLSession instances created only when timeouts are specified, avoiding overhead for default configurations
 
 ## Swift 6 Compliance
 

@@ -108,6 +108,8 @@ print(response.choices.first?.message.content ?? "No response")
 - ``User``
 - ``Stop``
 - ``LogitBias``
+- ``RequestTimeout``
+- ``ResourceTimeout``
 
 ### Tool Support
 

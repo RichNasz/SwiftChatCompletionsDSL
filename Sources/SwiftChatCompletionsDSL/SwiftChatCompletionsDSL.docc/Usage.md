@@ -310,6 +310,27 @@ let detailedRequest = try ChatRequest(model: "gpt-4") {
 }
 ```
 
+### Timeout Configuration
+
+Control request timeouts for reliable network operations:
+
+```swift
+let timeoutRequest = try ChatRequest(model: "gpt-4") {
+    try Temperature(0.7)
+    try MaxTokens(500)
+    try RequestTimeout(60)         // Individual HTTP request timeout (60 seconds)
+    try ResourceTimeout(300)       // Complete operation timeout (5 minutes)
+} messages: {
+    TextMessage(role: .user, content: "Generate a detailed technical analysis.")
+}
+```
+
+**Timeout Guidelines:**
+- **RequestTimeout**: How long to wait for the server to respond to individual requests (10-900 seconds)
+- **ResourceTimeout**: Total time for complete resource loading including retries (30-3600 seconds)
+- **Best Practice**: ResourceTimeout should be larger than RequestTimeout
+- **Use Cases**: Set shorter timeouts for user-facing interactions, longer for background processing
+
 ### Advanced Parameter Combinations
 
 ```swift
@@ -320,6 +341,7 @@ let preciseRequest = try ChatRequest(model: "gpt-4") {
     try PresencePenalty(0.1)       // Encourage topic diversity
     try MaxTokens(300)
     try User("tutorial-user")      // Track usage analytics
+    try RequestTimeout(45)         // Custom timeout for this request
 } messages: {
     TextMessage(role: .system, content: "You are a technical writer. Be precise and avoid repetition.")
     TextMessage(role: .user, content: "Explain the difference between classes and structs in Swift.")
@@ -441,14 +463,16 @@ func resilientCompletion(question: String, maxRetries: Int = 3) async throws -> 
         baseURL: "https://api.openai.com/v1/chat/completions",
         apiKey: "your-api-key"
     )
-    
+
     let request = try ChatRequest(model: "gpt-4") {
         try Temperature(0.7)
         try MaxTokens(200)
+        try RequestTimeout(30)         // Conservative timeout for retries
+        try ResourceTimeout(120)       // Allow time for multiple attempts
     } messages: {
         TextMessage(role: .user, content: question)
     }
-    
+
     for attempt in 1...maxRetries {
         do {
             let response = try await client.complete(request)
@@ -464,8 +488,40 @@ func resilientCompletion(question: String, maxRetries: Int = 3) async throws -> 
             throw error
         }
     }
-    
+
     throw LLMError.networkError("Unexpected retry loop exit")
+}
+```
+
+### Timeout-Specific Error Handling
+
+```swift
+func handleTimeouts(question: String) async -> String {
+    do {
+        let client = try LLMClient(
+            baseURL: "https://api.openai.com/v1/chat/completions",
+            apiKey: "your-api-key"
+        )
+
+        let request = try ChatRequest(model: "gpt-4") {
+            try Temperature(0.7)
+            try MaxTokens(200)
+            try RequestTimeout(15)         // Aggressive timeout for quick response
+            try ResourceTimeout(45)        // Overall operation limit
+        } messages: {
+            TextMessage(role: .user, content: question)
+        }
+
+        let response = try await client.complete(request)
+        return response.choices.first?.message.content ?? "No response received"
+
+    } catch LLMError.networkError(let description) where description.contains("timeout") {
+        return "Request timed out. The server took too long to respond. Try asking a simpler question."
+    } catch LLMError.networkError(let description) {
+        return "Network issue: \\(description)"
+    } catch {
+        return "Unexpected error: \\(error.localizedDescription)"
+    }
 }
 ```
 

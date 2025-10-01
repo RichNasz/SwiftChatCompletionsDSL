@@ -46,6 +46,7 @@ let request = try ChatRequest(model: "gpt-4") {
 - 🚀 **Swift Concurrency**: Built with async/await and actors
 - 🔧 **Extensible**: Easy to add custom messages and parameters
 - 🌊 **Streaming Support**: Real-time response processing
+- ⏱️ **Timeout Control**: Configurable request and resource timeouts
 - 🏗️ **Result Builders**: Leverage Swift's powerful DSL capabilities
 
 ## Quick Start
@@ -101,6 +102,8 @@ let request = try ChatRequest(model: "gpt-4") {
     try Temperature(0.7)
     try MaxTokens(150)
     try TopP(0.9)
+    try RequestTimeout(60)       // 60 second request timeout
+    try ResourceTimeout(300)     // 5 minute total timeout
 } messages: {
     TextMessage(role: .system, content: "You are a programming assistant.")
     TextMessage(role: .user, content: "How do I handle errors in Swift?")
@@ -134,6 +137,26 @@ for await delta in client.stream(streamingRequest) {
 }
 print() // New line when complete
 ```
+
+### Timeout Configuration
+
+Control network timeouts for reliable operations:
+
+```swift
+let request = try ChatRequest(model: "gpt-4") {
+    try Temperature(0.7)
+    try MaxTokens(200)
+    try RequestTimeout(30)       // Individual HTTP request timeout (10-900 seconds)
+    try ResourceTimeout(120)     // Complete operation timeout (30-3600 seconds)
+} messages: {
+    TextMessage(role: .user, content: "Generate a detailed analysis.")
+}
+```
+
+**Timeout Guidelines:**
+- **RequestTimeout**: How long to wait for server response to individual requests
+- **ResourceTimeout**: Total time for complete resource loading (should be larger than RequestTimeout)
+- **Best Practices**: Use shorter timeouts for user-facing interactions, longer for background processing
 
 For more comprehensive examples, see the [Examples/](Examples/) folder.
 
