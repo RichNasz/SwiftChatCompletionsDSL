@@ -1,0 +1,4 @@
+module SwiftChatCompletionsDSL {
+header "SwiftChatCompletionsDSL-Swift.h"
+export *
+}
