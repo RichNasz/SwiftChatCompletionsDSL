@@ -1,0 +1,19 @@
+{
+  "" : {
+    "diagnostics" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-primary.dia",
+    "emit-module-dependencies" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-primary-emit-module.d",
+    "emit-module-diagnostics" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-primary-emit-module.dia",
+    "pch" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-primary-Bridging-header.pch",
+    "swift-dependencies" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-primary.swiftdeps"
+  },
+  "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/Sources/SwiftChatCompletionsDSL/SwiftChatCompletionsDSL.swift" : {
+    "const-values" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-109910567c4ff0babaccfab46528c305.swiftconstvalues",
+    "dependencies" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-109910567c4ff0babaccfab46528c305.d",
+    "diagnostics" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-109910567c4ff0babaccfab46528c305.dia",
+    "index-unit-output-path" : "/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-109910567c4ff0babaccfab46528c305.o",
+    "llvm-bc" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-109910567c4ff0babaccfab46528c305.bc",
+    "object" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-109910567c4ff0babaccfab46528c305.o",
+    "swift-dependencies" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-109910567c4ff0babaccfab46528c305.swiftdeps",
+    "swiftmodule" : "/Users/rnaszcyn/Development/xcode26/SwiftChatCompletionsDSL/build/SwiftChatCompletionsDSL.build/Debug/SwiftChatCompletionsDSL.build/Objects-normal/arm64/SwiftChatCompletionsDSL-109910567c4ff0babaccfab46528c305~partial.swiftmodule"
+  }
+}
