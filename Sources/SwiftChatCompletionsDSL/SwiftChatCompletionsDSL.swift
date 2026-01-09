@@ -2094,6 +2094,44 @@ public actor LLMClient {
 	private let apiKey: String
 	/// URLSession for network requests
 	private let session: URLSession
+
+	/// Shared JSONDecoder for efficient delta parsing
+	private static let jsonDecoder = JSONDecoder()
+
+	/// Thread-safe cache for URLSession instances keyed by timeout configuration
+	private actor SessionCache {
+		private var cache: [String: URLSession] = [:]
+
+		func getSession(requestTimeout: TimeInterval?, resourceTimeout: TimeInterval?, defaultSession: URLSession) -> URLSession {
+			// Use default session if no custom timeouts
+			if requestTimeout == nil && resourceTimeout == nil {
+				return defaultSession
+			}
+
+			let key = "\(requestTimeout ?? 0)-\(resourceTimeout ?? 0)"
+			if let cached = cache[key] {
+				return cached
+			}
+
+			// Create optimized configuration for streaming
+			let config = URLSessionConfiguration.default
+			if let requestTimeout = requestTimeout {
+				config.timeoutIntervalForRequest = requestTimeout
+			}
+			if let resourceTimeout = resourceTimeout {
+				config.timeoutIntervalForResource = resourceTimeout
+			}
+			config.waitsForConnectivity = false
+			config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+
+			let newSession = URLSession(configuration: config)
+			cache[key] = newSession
+			return newSession
+		}
+	}
+
+	/// Shared session cache instance
+	private static let sessionCache = SessionCache()
 	
 	/// Creates a new LLM client for making chat completion requests.
 	///
@@ -2150,9 +2188,14 @@ public actor LLMClient {
 		guard !baseURL.isEmpty else {
 			throw LLMError.missingBaseURL
 		}
-		
+
 		self.baseURL = baseURL
 		self.apiKey = apiKey
+
+		// Optimize configuration for streaming LLM requests
+		sessionConfiguration.waitsForConnectivity = false
+		sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+
 		self.session = URLSession(configuration: sessionConfiguration)
 	}
 	
@@ -2232,20 +2275,12 @@ public actor LLMClient {
 			throw LLMError.encodingFailed(error.localizedDescription)
 		}
 
-		// Configure custom session if timeouts are specified
-		let sessionToUse: URLSession
-		if request.requestTimeout != nil || request.resourceTimeout != nil {
-			let config = URLSessionConfiguration.default.copy() as! URLSessionConfiguration
-			if let requestTimeout = request.requestTimeout {
-				config.timeoutIntervalForRequest = requestTimeout
-			}
-			if let resourceTimeout = request.resourceTimeout {
-				config.timeoutIntervalForResource = resourceTimeout
-			}
-			sessionToUse = URLSession(configuration: config)
-		} else {
-			sessionToUse = session
-		}
+		// Get cached session with appropriate timeout configuration
+		let sessionToUse = await Self.sessionCache.getSession(
+			requestTimeout: request.requestTimeout,
+			resourceTimeout: request.resourceTimeout,
+			defaultSession: session
+		)
 
 		do {
 			let (data, response) = try await sessionToUse.data(for: urlRequest)
@@ -2404,20 +2439,12 @@ public actor LLMClient {
 					let requestData = try JSONEncoder().encode(request)
 					urlRequest.httpBody = requestData
 
-					// Configure custom session if timeouts are specified
-					let sessionToUse: URLSession
-					if request.requestTimeout != nil || request.resourceTimeout != nil {
-						let config = URLSessionConfiguration.default.copy() as! URLSessionConfiguration
-						if let requestTimeout = request.requestTimeout {
-							config.timeoutIntervalForRequest = requestTimeout
-						}
-						if let resourceTimeout = request.resourceTimeout {
-							config.timeoutIntervalForResource = resourceTimeout
-						}
-						sessionToUse = URLSession(configuration: config)
-					} else {
-						sessionToUse = session
-					}
+					// Get cached session with appropriate timeout configuration
+					let sessionToUse = await Self.sessionCache.getSession(
+						requestTimeout: request.requestTimeout,
+						resourceTimeout: request.resourceTimeout,
+						defaultSession: session
+					)
 
 					let (asyncBytes, response) = try await sessionToUse.bytes(for: urlRequest)
 					
@@ -2456,7 +2483,7 @@ public actor LLMClient {
 									
 									if let jsonData = data.data(using: .utf8) {
 										do {
-											let delta = try JSONDecoder().decode(ChatDelta.self, from: jsonData)
+											let delta = try Self.jsonDecoder.decode(ChatDelta.self, from: jsonData)
 											continuation.yield(delta)
 										} catch {
 											// Continue processing other deltas even if one fails
