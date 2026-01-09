@@ -2382,16 +2382,16 @@ public actor LLMClient {
 	/// - Returns: AsyncStream yielding ``ChatDelta`` objects with incremental response content
 	/// 
 	/// - Note: This method is `nonisolated` for optimal streaming performance while maintaining thread safety.
-	nonisolated public func stream(_ request: ChatRequest) -> AsyncStream<ChatDelta> {
+	nonisolated public func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatDelta, Error> {
 		let baseURL = self.baseURL
 		let apiKey = self.apiKey
 		let session = self.session
-		
-		return AsyncStream { continuation in
+
+		return AsyncThrowingStream { continuation in
 			Task { @Sendable in
 				do {
 					guard let url = URL(string: baseURL) else {
-						continuation.finish()
+						continuation.finish(throwing: LLMError.invalidURL)
 						return
 					}
 					
@@ -2426,10 +2426,10 @@ public actor LLMClient {
 							case 200...299:
 								break
 							case 429:
-								continuation.finish()
+								continuation.finish(throwing: LLMError.rateLimit)
 								return
 							default:
-								continuation.finish()
+								continuation.finish(throwing: LLMError.serverError(statusCode: httpResponse.statusCode, message: nil))
 								return
 						}
 					}
@@ -2469,8 +2469,10 @@ public actor LLMClient {
 					}
 					
 					continuation.finish()
+				} catch let error as LLMError {
+					continuation.finish(throwing: error)
 				} catch {
-					continuation.finish()
+					continuation.finish(throwing: LLMError.networkError(error.localizedDescription))
 				}
 			}
 		}
