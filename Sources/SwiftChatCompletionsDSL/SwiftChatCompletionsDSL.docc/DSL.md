@@ -445,6 +445,85 @@ ChatRequest(model: "gpt-4") {
 }
 ```
 
+## Handling HTTP and Network Errors
+
+When making requests to LLM APIs, various errors can occur. The DSL provides the `LLMError` enum to help you handle them gracefully.
+
+### Rate Limiting (HTTP 429)
+
+When you send too many requests, the API may return a rate limit error:
+
+```swift
+do {
+    let response = try await client.complete(request)
+} catch LLMError.rateLimit {
+    // Wait before retrying - implement exponential backoff
+    print("Rate limited. Please wait before retrying.")
+}
+```
+
+### Server Errors (HTTP 4xx/5xx)
+
+Server errors include authentication failures, bad requests, and server issues:
+
+```swift
+do {
+    let response = try await client.complete(request)
+} catch LLMError.serverError(let statusCode, let message) {
+    switch statusCode {
+    case 401:
+        print("Authentication failed - check your API key")
+    case 403:
+        print("Access forbidden - check your permissions")
+    case 500, 502, 503:
+        print("Server error - try again later")
+    default:
+        print("HTTP \(statusCode): \(message ?? "Unknown error")")
+    }
+}
+```
+
+### Network and Connection Errors
+
+Network issues include timeouts, DNS failures, and connection problems:
+
+```swift
+do {
+    let response = try await client.complete(request)
+} catch LLMError.networkError(let description) {
+    if description.contains("timeout") {
+        print("Request timed out - try increasing RequestTimeout")
+    } else {
+        print("Network error: \(description)")
+    }
+}
+```
+
+### Complete Error Handling Pattern
+
+Here's a comprehensive error handling pattern:
+
+```swift
+do {
+    let response = try await client.complete(request)
+    print(response.firstContent ?? "No response")
+} catch LLMError.rateLimit {
+    print("Rate limited - implement backoff and retry")
+} catch LLMError.serverError(let code, let message) {
+    print("Server error \(code): \(message ?? "Unknown")")
+} catch LLMError.networkError(let description) {
+    print("Network error: \(description)")
+} catch LLMError.invalidValue(let message) {
+    print("Invalid parameter: \(message)")
+} catch LLMError.missingBaseURL {
+    print("Configuration error: base URL is required")
+} catch LLMError.missingModel {
+    print("Configuration error: model is required")
+} catch {
+    print("Unexpected error: \(error)")
+}
+```
+
 ## Next Steps
 
 Now that you understand the basics of DSLs and SwiftChatCompletionsDSL:

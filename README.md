@@ -192,6 +192,41 @@ let request = try conversation.request(model: "gpt-4") {
 conversation.clear()
 ```
 
+### Error Handling
+
+The DSL provides comprehensive error handling through the `LLMError` enum:
+
+```swift
+do {
+    let response = try await client.complete(request)
+    print(response.firstContent ?? "No response")
+} catch LLMError.rateLimit {
+    // HTTP 429 - Rate limited by the API
+    print("Rate limited. Wait before retrying.")
+} catch LLMError.serverError(let statusCode, let message) {
+    // HTTP 4xx/5xx errors with status code and optional message
+    print("Server error \(statusCode): \(message ?? "Unknown")")
+} catch LLMError.networkError(let description) {
+    // Connection issues, timeouts, DNS failures
+    print("Network error: \(description)")
+} catch LLMError.invalidValue(let message) {
+    // Parameter validation errors (e.g., Temperature out of range)
+    print("Invalid parameter: \(message)")
+} catch LLMError.decodingFailed(let message) {
+    // Response parsing errors
+    print("Failed to decode response: \(message)")
+} catch {
+    print("Unexpected error: \(error)")
+}
+```
+
+**Common Error Types:**
+- **rateLimit**: API rate limit exceeded (HTTP 429)
+- **serverError**: Server returned an error with status code
+- **networkError**: Connection failed, timed out, or DNS error
+- **invalidValue**: Configuration parameter out of valid range
+- **missingBaseURL/missingModel**: Required fields not provided
+
 For more comprehensive examples, see the [Examples/](Examples/) folder.
 
 ## Documentation

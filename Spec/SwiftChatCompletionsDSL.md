@@ -43,6 +43,34 @@ To support conversation history, the DSL is extended with:
 - **LLMError**: Custom errors for API failures.
   - Signature: `enum LLMError: Error { case invalidURL, encodingFailed(String), networkError(String), decodingFailed(String), serverError(statusCode: Int, message: String?), rateLimit, invalidResponse, invalidValue(String), missingBaseURL, missingModel }`
   - Purpose: Handles errors like invalid URLs, JSON failures, server errors (e.g., HTTP 429 for rate limits), missing required fields, and invalid parameter values. The `invalidValue(String)` case is specifically for configuration parameter validation with descriptive error messages.
+  - **Error Cases**:
+    - `invalidURL`: Base URL could not be converted to a valid URL
+    - `encodingFailed(String)`: JSON encoding of the request failed
+    - `networkError(String)`: Network-level errors (connection failed, timeout, DNS failure)
+    - `decodingFailed(String)`: JSON decoding of the response failed
+    - `serverError(statusCode: Int, message: String?)`: HTTP error responses (4xx, 5xx)
+    - `rateLimit`: HTTP 429 rate limiting error
+    - `invalidResponse`: Response format was unexpected or invalid
+    - `invalidValue(String)`: Configuration parameter validation failed
+    - `missingBaseURL`: Empty or missing base URL in client initialization
+    - `missingModel`: Empty or missing model in request
+  - **Usage Example**:
+    ```swift
+    do {
+        let response = try await client.complete(request)
+        print(response.firstContent ?? "No response")
+    } catch LLMError.rateLimit {
+        print("Rate limited - wait before retrying")
+    } catch LLMError.serverError(let statusCode, let message) {
+        print("Server error \(statusCode): \(message ?? "Unknown")")
+    } catch LLMError.networkError(let description) {
+        print("Network error: \(description)")
+    } catch LLMError.invalidValue(let message) {
+        print("Invalid parameter: \(message)")
+    } catch {
+        print("Error: \(error)")
+    }
+    ```
 
 ### 3. Protocols
 - **ChatMessage**: Extensible protocol for messages.

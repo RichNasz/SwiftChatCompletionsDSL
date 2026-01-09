@@ -1114,4 +1114,70 @@ struct LLMClientNetworkTests {
 
         #expect(deltas.isEmpty)
     }
+
+    @Test func completeDecodingFailed() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            // Return invalid JSON that cannot be decoded as ChatResponse
+            let invalidJSON = Data("{ not valid json }".utf8)
+            return (response, invalidJSON)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.example.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "test-model", messages: [
+            TextMessage(role: .user, content: "Hello")
+        ])
+
+        await #expect(throws: LLMError.self) {
+            try await client.complete(request)
+        }
+    }
+
+    @Test func streamDecodingFailed() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        // SSE with malformed JSON in data line - streaming throws decodingFailed
+        let malformedSSE = "data: { not valid json }\n\ndata: [DONE]\n\n"
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, malformedSSE.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "gpt-4", stream: true, messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        // The stream should throw decodingFailed when it encounters malformed JSON
+        await #expect(throws: LLMError.self) {
+            for try await _ in client.stream(request) {
+                // Consume stream - should throw on malformed JSON
+            }
+        }
+    }
 }
