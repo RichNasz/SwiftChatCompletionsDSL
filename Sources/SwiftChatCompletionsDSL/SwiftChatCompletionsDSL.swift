@@ -83,6 +83,70 @@ public enum LLMError: Error, Equatable {
 	case missingModel
 }
 
+// MARK: - Validation Helpers
+
+/// Validates that a Double value falls within the specified closed range.
+/// - Parameters:
+///   - value: The value to validate
+///   - range: The valid range for the value
+///   - parameterName: Name of the parameter for error messages
+/// - Throws: LLMError.invalidValue if value is outside the range
+@inlinable
+func validateRange(_ value: Double, in range: ClosedRange<Double>, parameterName: String) throws {
+	guard range.contains(value) else {
+		throw LLMError.invalidValue("\(parameterName) must be between \(range.lowerBound) and \(range.upperBound), got \(value)")
+	}
+}
+
+/// Validates that a timeout value (in seconds) falls within the specified closed range.
+/// - Parameters:
+///   - value: The timeout value to validate
+///   - range: The valid range for the value
+///   - parameterName: Name of the parameter for error messages
+/// - Throws: LLMError.invalidValue if value is outside the range
+@inlinable
+func validateTimeoutRange(_ value: TimeInterval, in range: ClosedRange<TimeInterval>, parameterName: String) throws {
+	guard range.contains(value) else {
+		throw LLMError.invalidValue("\(parameterName) must be between \(Int(range.lowerBound)) and \(Int(range.upperBound)) seconds, got \(value)")
+	}
+}
+
+/// Validates that an Int value is greater than zero.
+/// - Parameters:
+///   - value: The value to validate
+///   - parameterName: Name of the parameter for error messages
+/// - Throws: LLMError.invalidValue if value is not positive
+@inlinable
+func validatePositive(_ value: Int, parameterName: String) throws {
+	guard value > 0 else {
+		throw LLMError.invalidValue("\(parameterName) must be greater than 0, got \(value)")
+	}
+}
+
+/// Validates that a String value is not empty.
+/// - Parameters:
+///   - value: The value to validate
+///   - parameterName: Name of the parameter for error messages
+/// - Throws: LLMError.invalidValue if value is empty
+@inlinable
+func validateNotEmpty(_ value: String, parameterName: String) throws {
+	guard !value.isEmpty else {
+		throw LLMError.invalidValue("\(parameterName) cannot be empty")
+	}
+}
+
+/// Validates that an array is not empty.
+/// - Parameters:
+///   - value: The array to validate
+///   - parameterName: Name of the parameter for error messages
+/// - Throws: LLMError.invalidValue if array is empty
+@inlinable
+func validateNotEmpty<T>(_ value: [T], parameterName: String) throws {
+	guard !value.isEmpty else {
+		throw LLMError.invalidValue("\(parameterName) cannot be empty")
+	}
+}
+
 // MARK: - Protocols
 
 /// Protocol for extensible chat messages.
@@ -226,17 +290,15 @@ public struct TextMessage: ChatMessage, Sendable {
 public struct Temperature: ChatConfigParameter {
 	/// The temperature value between 0.0 and 2.0
 	public let value: Double
-	
+
 	/// Creates a temperature configuration parameter.
 	/// - Parameter value: Temperature value between 0.0 and 2.0
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is outside valid range
 	public init(_ value: Double) throws {
-		guard (0.0...2.0).contains(value) else {
-			throw LLMError.invalidValue("Temperature must be between 0.0 and 2.0, got \(value)")
-		}
+		try validateRange(value, in: 0.0...2.0, parameterName: "Temperature")
 		self.value = value
 	}
-	
+
 	public func apply(to request: inout ChatRequest) {
 		request.temperature = value
 	}
@@ -274,17 +336,15 @@ public struct Temperature: ChatConfigParameter {
 public struct MaxTokens: ChatConfigParameter {
 	/// The maximum number of tokens to generate
 	public let value: Int
-	
+
 	/// Creates a maximum tokens configuration parameter.
 	/// - Parameter value: Maximum number of tokens (must be > 0)
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is not positive
 	public init(_ value: Int) throws {
-		guard value > 0 else {
-			throw LLMError.invalidValue("MaxTokens must be greater than 0, got \(value)")
-		}
+		try validatePositive(value, parameterName: "MaxTokens")
 		self.value = value
 	}
-	
+
 	public func apply(to request: inout ChatRequest) {
 		request.maxTokens = value
 	}
@@ -325,17 +385,15 @@ public struct MaxTokens: ChatConfigParameter {
 public struct TopP: ChatConfigParameter {
 	/// The top-p value between 0.0 and 1.0
 	public let value: Double
-	
+
 	/// Creates a top-p configuration parameter.
 	/// - Parameter value: Top-p value between 0.0 and 1.0
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is outside valid range
 	public init(_ value: Double) throws {
-		guard (0.0...1.0).contains(value) else {
-			throw LLMError.invalidValue("TopP must be between 0.0 and 1.0, got \(value)")
-		}
+		try validateRange(value, in: 0.0...1.0, parameterName: "TopP")
 		self.value = value
 	}
-	
+
 	public func apply(to request: inout ChatRequest) {
 		request.topP = value
 	}
@@ -377,17 +435,15 @@ public struct TopP: ChatConfigParameter {
 public struct FrequencyPenalty: ChatConfigParameter {
 	/// The frequency penalty value between -2.0 and 2.0
 	public let value: Double
-	
+
 	/// Creates a frequency penalty configuration parameter.
 	/// - Parameter value: Frequency penalty value between -2.0 and 2.0
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is outside valid range
 	public init(_ value: Double) throws {
-		guard (-2.0...2.0).contains(value) else {
-			throw LLMError.invalidValue("FrequencyPenalty must be between -2.0 and 2.0, got \(value)")
-		}
+		try validateRange(value, in: -2.0...2.0, parameterName: "FrequencyPenalty")
 		self.value = value
 	}
-	
+
 	public func apply(to request: inout ChatRequest) {
 		request.frequencyPenalty = value
 	}
@@ -431,17 +487,15 @@ public struct FrequencyPenalty: ChatConfigParameter {
 public struct PresencePenalty: ChatConfigParameter {
 	/// The presence penalty value between -2.0 and 2.0
 	public let value: Double
-	
+
 	/// Creates a presence penalty configuration parameter.
 	/// - Parameter value: Presence penalty value between -2.0 and 2.0
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is outside valid range
 	public init(_ value: Double) throws {
-		guard (-2.0...2.0).contains(value) else {
-			throw LLMError.invalidValue("PresencePenalty must be between -2.0 and 2.0, got \(value)")
-		}
+		try validateRange(value, in: -2.0...2.0, parameterName: "PresencePenalty")
 		self.value = value
 	}
-	
+
 	public func apply(to request: inout ChatRequest) {
 		request.presencePenalty = value
 	}
@@ -487,17 +541,15 @@ public struct PresencePenalty: ChatConfigParameter {
 public struct N: ChatConfigParameter {
 	/// The number of completions to generate (must be > 0)
 	public let value: Int
-	
+
 	/// Creates a completions count configuration parameter.
 	/// - Parameter value: Number of completions to generate (must be > 0)
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is not positive
 	public init(_ value: Int) throws {
-		guard value > 0 else {
-			throw LLMError.invalidValue("N must be greater than 0, got \(value)")
-		}
+		try validatePositive(value, parameterName: "N")
 		self.value = value
 	}
-	
+
 	public func apply(to request: inout ChatRequest) {
 		request.n = value
 	}
@@ -610,17 +662,15 @@ public struct LogitBias: ChatConfigParameter {
 public struct User: ChatConfigParameter {
 	/// The user identifier string (cannot be empty)
 	public let value: String
-	
+
 	/// Creates a user identifier configuration parameter.
 	/// - Parameter value: User identifier string (cannot be empty)
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is empty
 	public init(_ value: String) throws {
-		guard !value.isEmpty else {
-			throw LLMError.invalidValue("User identifier cannot be empty")
-		}
+		try validateNotEmpty(value, parameterName: "User identifier")
 		self.value = value
 	}
-	
+
 	public func apply(to request: inout ChatRequest) {
 		request.user = value
 	}
@@ -674,17 +724,15 @@ public struct User: ChatConfigParameter {
 public struct Stop: ChatConfigParameter {
 	/// Array of stop sequences (maximum 4, cannot be empty)
 	public let value: [String]
-	
+
 	/// Creates a stop sequences configuration parameter.
 	/// - Parameter value: Array of stop sequences (cannot be empty, maximum 4)
 	/// - Throws: ``LLMError/invalidValue(_:)`` if array is empty
 	public init(_ value: [String]) throws {
-		guard !value.isEmpty else {
-			throw LLMError.invalidValue("Stop sequences array cannot be empty")
-		}
+		try validateNotEmpty(value, parameterName: "Stop sequences array")
 		self.value = value
 	}
-	
+
 	public func apply(to request: inout ChatRequest) {
 		request.stop = value
 	}
@@ -742,9 +790,7 @@ public struct RequestTimeout: ChatConfigParameter {
 	/// - Parameter value: Timeout value in seconds (must be between 10 and 900)
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is outside valid range
 	public init(_ value: TimeInterval) throws {
-		guard value >= 10 && value <= 900 else {
-			throw LLMError.invalidValue("Request timeout must be between 10 and 900 seconds, got \(value)")
-		}
+		try validateTimeoutRange(value, in: 10...900, parameterName: "Request timeout")
 		self.value = value
 	}
 
@@ -813,9 +859,7 @@ public struct ResourceTimeout: ChatConfigParameter {
 	/// - Parameter value: Timeout value in seconds (must be between 30 and 3600)
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is outside valid range
 	public init(_ value: TimeInterval) throws {
-		guard value >= 30 && value <= 3600 else {
-			throw LLMError.invalidValue("Resource timeout must be between 30 and 3600 seconds, got \(value)")
-		}
+		try validateTimeoutRange(value, in: 30...3600, parameterName: "Resource timeout")
 		self.value = value
 	}
 
@@ -1498,18 +1542,7 @@ public struct ChatRequest: Encodable, Sendable {
 		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
 		@ChatBuilder messages: () -> [any ChatMessage]
 	) throws {
-		guard !model.isEmpty else {
-			throw LLMError.missingModel
-		}
-		
-		self.model = model
-		self.stream = stream
-		self.messages = messages()
-		
-		// Apply configuration parameters
-		for parameter in try config() {
-			parameter.apply(to: &self)
-		}
+		try self.init(model: model, stream: stream, config: config, messages: messages())
 	}
 	
 	/// Creates a new chat completion request with messages only (no configuration).

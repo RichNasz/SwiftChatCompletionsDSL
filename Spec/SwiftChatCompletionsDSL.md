@@ -29,7 +29,12 @@ To support conversation history, the DSL is extended with:
 
 ## Core Components
 
-### 1. Enums
+### 1. Type Aliases
+- **ChatMessages**: Convenience type alias for message arrays.
+  - Signature: `typealias ChatMessages = [any ChatMessage]`
+  - Purpose: Provides a shorter, more readable type for message arrays throughout the codebase.
+
+### 2. Enums
 - **Role**: Defines message roles, mapped to JSON strings.
   - Signature: `enum Role: String, Codable { case system, user, assistant, tool }`
   - Purpose: Represents message roles (`system`, `user`, `assistant`, `tool` for future extensions like tool calls).
@@ -39,7 +44,7 @@ To support conversation history, the DSL is extended with:
   - Signature: `enum LLMError: Error { case invalidURL, encodingFailed(String), networkError(String), decodingFailed(String), serverError(statusCode: Int, message: String?), rateLimit, invalidResponse, invalidValue(String), missingBaseURL, missingModel }`
   - Purpose: Handles errors like invalid URLs, JSON failures, server errors (e.g., HTTP 429 for rate limits), missing required fields, and invalid parameter values. The `invalidValue(String)` case is specifically for configuration parameter validation with descriptive error messages.
 
-### 2. Protocols
+### 3. Protocols
 - **ChatMessage**: Extensible protocol for messages.
   - Signature: `protocol ChatMessage: Encodable, Sendable { var role: Role { get } }`
   - Purpose: Defines messages with a role. Content structure is left to concrete implementations (e.g., `TextMessage` has `content: String`) to allow flexibility for different message types including multimodal content.
@@ -49,7 +54,7 @@ To support conversation history, the DSL is extended with:
   - Signature: `protocol ChatConfigParameter { func apply(to request: inout ChatRequest) }`
   - Purpose: Allows parameter structs (e.g., `Temperature`) to modify `ChatRequest` fields during initialization.
 
-### 3. Structs
+### 4. Structs
 - **TextMessage**: Basic text-based message implementing `ChatMessage`.
   - Signature: `struct TextMessage: ChatMessage { let role: Role; let content: String }`
   - JSON: Encodes to `{ "role": String, "content": String }` with `CodingKeys` for `role`, `content`.
@@ -168,17 +173,33 @@ To support conversation history, the DSL is extended with:
         }
 
         mutating func addUser(content: String) {
-            add(TextMessage(role: .user, content: content))
+            add(message: TextMessage(role: .user, content: content))
         }
 
         mutating func addAssistant(content: String) {
-            add(TextMessage(role: .assistant, content: content))
+            add(message: TextMessage(role: .assistant, content: content))
+        }
+
+        mutating func addSystem(content: String) {
+            add(message: TextMessage(role: .system, content: content))
+        }
+
+        var lastMessageRole: Role? {
+            history.last?.role
+        }
+
+        var messageCount: Int {
+            history.count
+        }
+
+        mutating func clear() {
+            history.removeAll()
         }
 
         func request(
             model: String,
             stream: Bool = false,
-            @ChatConfigBuilder config: () -> [ChatConfigParameter] = { [] },
+            @ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
             @ChatBuilder additionalMessages: () -> [any ChatMessage] = { [] }
         ) throws -> ChatRequest {
             let allMessages = history + additionalMessages()
@@ -186,7 +207,7 @@ To support conversation history, the DSL is extended with:
         }
     }
     ```
-  - Purpose: Maintains an array of messages as conversation history, with convenience methods for adding user/assistant messages. Generates `ChatRequest` using the history plus optional additional messages.
+  - Purpose: Maintains an array of messages as conversation history, with convenience methods for adding user/assistant/system messages. Provides utility properties (`lastMessageRole`, `messageCount`) and methods (`clear()`) for history management. Generates `ChatRequest` using the history plus optional additional messages.
 
 - **ChatResponse**: For non-streaming responses.
   - Signature:
@@ -220,7 +241,25 @@ To support conversation history, the DSL is extended with:
     ```
   - JSON: Decodes SSE chunks with `delta.content` for incremental text.
 
-### 4. Result Builders
+- **Response Convenience Extensions**: Convenience properties for common access patterns.
+  - **ChatResponse Extensions**:
+    ```swift
+    extension ChatResponse {
+        var firstContent: String? { choices.first?.message.content }
+        var firstFinishReason: String? { choices.first?.finishReason }
+        var totalTokens: Int { usage?.totalTokens ?? 0 }
+    }
+    ```
+  - **ChatDelta Extensions**:
+    ```swift
+    extension ChatDelta {
+        var firstContent: String? { choices.first?.delta.content }
+        var firstFinishReason: String? { choices.first?.finishReason }
+    }
+    ```
+  - Purpose: Provides quick access to the most commonly used response data without navigating nested structures. `firstContent` returns the content from the first choice, `firstFinishReason` returns the finish reason, and `totalTokens` returns the total token count (defaulting to 0 if unavailable).
+
+### 5. Result Builders
 - **ChatBuilder**: Composes message sequences.
   - Signature:
     ```swift
@@ -251,7 +290,7 @@ To support conversation history, the DSL is extended with:
     ```
   - Purpose: Enables declarative configuration blocks with control flow.
 
-### 5. Actor: LLMClient
+### 6. Actor: LLMClient
 - Signature:
   ```swift
   actor LLMClient {
