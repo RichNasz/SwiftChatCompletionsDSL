@@ -63,7 +63,7 @@ let request = try ChatRequest(model: "gpt-4") {
 }
 
 let response = try await client.complete(request)
-print(response.choices.first?.message.content ?? "No response")
+print(response.firstContent ?? "No response")  // Convenience property
 ```
 
 ## Learn More About
@@ -131,6 +131,7 @@ print(response.choices.first?.message.content ?? "No response")
 ### Core Types
 
 - ``Role``
+- ``ChatMessages``
 
 ## See Also
 

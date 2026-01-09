@@ -6,6 +6,16 @@ Understanding the technical design and patterns used in SwiftChatCompletionsDSL.
 
 SwiftChatCompletionsDSL is built using modern Swift patterns that prioritize type safety, performance, and maintainability. The architecture leverages result builders, actor-based concurrency, and protocol-oriented design to create a robust, extensible DSL.
 
+## Type Aliases
+
+The package provides a convenience type alias for cleaner type signatures:
+
+```swift
+public typealias ChatMessages = [any ChatMessage]
+```
+
+This simplifies function signatures and variable declarations when working with message arrays.
+
 ## Core Design Patterns
 
 ### Result Builder Pattern
@@ -223,6 +233,89 @@ public enum LLMError: Error, Equatable {
 - **Descriptive messages**: Error context is preserved and propagated
 - **Equatable conformance**: Enables testing and comparison
 - **Sendable compliance**: Safe for concurrent environments
+
+## Response Convenience Extensions
+
+The package provides convenience extensions on response types for common access patterns:
+
+```swift
+extension ChatResponse {
+    /// Returns the first choice's message content, or nil if no choices exist.
+    public var firstContent: String? {
+        choices.first?.message.content
+    }
+
+    /// Returns the finish reason of the first choice, or nil if no choices exist.
+    public var firstFinishReason: String? {
+        choices.first?.finishReason
+    }
+
+    /// Returns total token usage, or 0 if usage data is unavailable.
+    public var totalTokens: Int {
+        usage?.totalTokens ?? 0
+    }
+}
+
+extension ChatDelta {
+    /// Returns the first choice's content delta, or nil if no content in this delta.
+    public var firstContent: String? {
+        choices.first?.delta.content
+    }
+
+    /// Returns the first choice's finish reason, or nil if not finished.
+    public var firstFinishReason: String? {
+        choices.first?.finishReason
+    }
+}
+```
+
+**Benefits:**
+- **Reduced boilerplate**: Common patterns are encapsulated
+- **Cleaner code**: `response.firstContent` vs `response.choices.first?.message.content`
+- **Consistent defaults**: `totalTokens` returns 0 instead of nil when usage data is unavailable
+
+### Accessing Detailed Token Usage
+
+For detailed token breakdown, access the `usage` property directly:
+
+```swift
+let response = try await client.complete(request)
+
+// Access all three token counts
+if let usage = response.usage {
+    let input = usage.promptTokens      // Tokens in your prompt
+    let output = usage.completionTokens // Tokens in the response
+    let total = usage.totalTokens       // Sum of input + output
+}
+
+// Quick access via convenience property
+let total = response.totalTokens  // Returns 0 if usage unavailable
+```
+
+The `usage` property is optional because some API providers or local models may not return token statistics.
+
+## Session Caching
+
+The package uses an internal `SessionCache` actor to efficiently manage URLSession instances:
+
+```swift
+private actor SessionCache {
+    private var cache: [String: URLSession] = [:]
+
+    func getSession(
+        requestTimeout: TimeInterval?,
+        resourceTimeout: TimeInterval?,
+        defaultSession: URLSession
+    ) -> URLSession {
+        // Returns cached session or creates new one based on timeout configuration
+    }
+}
+```
+
+**Benefits:**
+- **Performance**: Reuses sessions for requests with identical timeout settings
+- **Resource efficiency**: Avoids creating new URLSession instances for each request
+- **Thread safety**: Actor isolation ensures safe concurrent access
 
 ## Streaming Implementation
 

@@ -27,7 +27,7 @@ let request = try ChatRequest(model: "gpt-4") {
 }
 
 let response = try await client.complete(request)
-print(response.choices.first?.message.content ?? "No response")
+print(response.firstContent ?? "No response")  // Convenience property
 ```
 
 **What's happening here?**
@@ -97,7 +97,7 @@ func askQuestion(_ question: String) async throws -> String {
     }
     
     let response = try await client.complete(request)
-    return response.choices.first?.message.content ?? "No response received"
+    return response.firstContent ?? "No response received"  // Convenience property
 }
 
 // Usage
@@ -128,7 +128,7 @@ func reviewSwiftCode(_ code: String) async throws -> String {
     }
     
     let response = try await client.complete(request)
-    return response.choices.first?.message.content ?? "No review available"
+    return response.firstContent ?? "No review available"  // Convenience property
 }
 
 // Usage
@@ -160,7 +160,7 @@ func translateText(_ text: String, to language: String) async throws -> String {
     }
     
     let response = try await client.complete(request)
-    return response.choices.first?.message.content ?? "Translation failed"
+    return response.firstContent ?? "Translation failed"  // Convenience property
 }
 
 // Usage
@@ -193,13 +193,13 @@ func streamResponse(to question: String) async throws {
     
     print("AI: ", terminator: "")
     for await delta in client.stream(request) {
-        if let content = delta.choices.first?.delta.content {
+        if let content = delta.firstContent {  // Convenience property
             print(content, terminator: "")
             fflush(stdout)  // Ensure immediate output
         }
-        
+
         // Check if streaming is complete
-        if let finishReason = delta.choices.first?.finishReason {
+        if let finishReason = delta.firstFinishReason {  // Convenience property
             print("\\n[Finished: \\(finishReason)]")
             break
         }
@@ -243,15 +243,15 @@ class ChatSession {
         
         print("Assistant: ", terminator: "")
         var assistantResponse = ""
-        
+
         for await delta in client.stream(request) {
-            if let content = delta.choices.first?.delta.content {
+            if let content = delta.firstContent {  // Convenience property
                 print(content, terminator: "")
                 assistantResponse += content
                 fflush(stdout)
             }
-            
-            if delta.choices.first?.finishReason != nil {
+
+            if delta.firstFinishReason != nil {  // Convenience property
                 break
             }
         }
@@ -352,6 +352,8 @@ let preciseRequest = try ChatRequest(model: "gpt-4") {
 
 ### Using ChatConversation for State Management
 
+`ChatConversation` provides convenience methods and properties for managing multi-turn conversations:
+
 ```swift
 import SwiftChatCompletionsDSL
 
@@ -359,6 +361,15 @@ import SwiftChatCompletionsDSL
 var conversation = ChatConversation {
     TextMessage(role: .system, content: "You are a helpful programming tutor.")
 }
+
+// Add messages using convenience methods
+conversation.addUser(content: "What's a variable?")
+conversation.addAssistant(content: "A variable is a named storage location...")
+conversation.addSystem(content: "Remember to use simple explanations.")  // System messages too!
+
+// Check conversation state with utility properties
+print("Message count: \\(conversation.messageCount)")
+print("Last role: \\(conversation.lastMessageRole ?? .user)")
 
 let client = try LLMClient(
     baseURL: "https://api.openai.com/v1/chat/completions",
@@ -369,21 +380,22 @@ let client = try LLMClient(
 func continueConversation(with userMessage: String) async throws {
     // Add user message
     conversation.addUser(content: userMessage)
-    
+
     // Generate request from conversation history
     let request = try conversation.request(model: "gpt-4") {
         try Temperature(0.7)
         try MaxTokens(200)
     }
-    
+
     // Get response
     let response = try await client.complete(request)
-    
-    if let assistantMessage = response.choices.first?.message.content {
+
+    if let assistantMessage = response.firstContent {  // Convenience property
         print("You: \\(userMessage)")
         print("Assistant: \\(assistantMessage)")
+        print("Tokens used: \\(response.totalTokens)")  // Convenience property
         print("---")
-        
+
         // Add assistant response to conversation
         conversation.addAssistant(content: assistantMessage)
     }
@@ -394,7 +406,11 @@ try await continueConversation(with: "What's a variable in programming?")
 try await continueConversation(with: "How do I declare one in Swift?")
 try await continueConversation(with: "What about constants?")
 
-print("Conversation has \\(conversation.history.count) total messages")
+print("Conversation has \\(conversation.messageCount) total messages")
+
+// Clear conversation when starting fresh
+conversation.clear()
+print("After clear: \\(conversation.messageCount) messages")
 ```
 
 ### Pre-built Conversation Contexts
@@ -435,8 +451,8 @@ func safeCompletion(question: String) async -> String {
         }
         
         let response = try await client.complete(request)
-        return response.choices.first?.message.content ?? "No response received"
-        
+        return response.firstContent ?? "No response received"  // Convenience property
+
     } catch LLMError.invalidValue(let message) {
         return "Configuration error: \\(message)"
     } catch LLMError.rateLimit {
@@ -476,7 +492,7 @@ func resilientCompletion(question: String, maxRetries: Int = 3) async throws -> 
     for attempt in 1...maxRetries {
         do {
             let response = try await client.complete(request)
-            return response.choices.first?.message.content ?? "No response"
+            return response.firstContent ?? "No response"  // Convenience property
         } catch LLMError.networkError {
             if attempt == maxRetries {
                 throw LLMError.networkError("Failed after \\(maxRetries) attempts")
@@ -513,7 +529,7 @@ func handleTimeouts(question: String) async -> String {
         }
 
         let response = try await client.complete(request)
-        return response.choices.first?.message.content ?? "No response received"
+        return response.firstContent ?? "No response received"  // Convenience property
 
     } catch LLMError.networkError(let description) where description.contains("timeout") {
         return "Request timed out. The server took too long to respond. Try asking a simpler question."
@@ -603,6 +619,79 @@ let azureClient = try LLMClient(
 ```
 
 The DSL works consistently across different providers that support the OpenAI chat completions format, making it easy to switch between services or test with local models.
+
+## Token Usage Tracking
+
+Monitor API usage and costs by accessing token counts from responses:
+
+### Accessing All Token Counts
+
+```swift
+let response = try await client.complete(request)
+
+// Access detailed token breakdown via the usage property
+if let usage = response.usage {
+    print("Input tokens (prompt): \(usage.promptTokens)")
+    print("Output tokens (completion): \(usage.completionTokens)")
+    print("Total tokens: \(usage.totalTokens)")
+
+    // Calculate approximate cost (example rates)
+    let inputCost = Double(usage.promptTokens) * 0.00003  // $0.03 per 1K tokens
+    let outputCost = Double(usage.completionTokens) * 0.00006  // $0.06 per 1K tokens
+    print("Estimated cost: $\(inputCost + outputCost)")
+}
+```
+
+### Using Convenience Properties
+
+For quick access to the total token count:
+
+```swift
+let response = try await client.complete(request)
+
+// Convenience property returns 0 if usage data is unavailable
+print("Total tokens used: \(response.totalTokens)")
+
+// For detailed breakdown, use the usage property
+if let usage = response.usage {
+    print("Breakdown: \(usage.promptTokens) in, \(usage.completionTokens) out")
+}
+```
+
+### Tracking Usage Across Sessions
+
+```swift
+class UsageTracker {
+    var totalPromptTokens = 0
+    var totalCompletionTokens = 0
+
+    func recordUsage(from response: ChatResponse) {
+        if let usage = response.usage {
+            totalPromptTokens += usage.promptTokens
+            totalCompletionTokens += usage.completionTokens
+        }
+    }
+
+    var totalTokens: Int {
+        totalPromptTokens + totalCompletionTokens
+    }
+
+    func printSummary() {
+        print("Session usage:")
+        print("  Input tokens: \(totalPromptTokens)")
+        print("  Output tokens: \(totalCompletionTokens)")
+        print("  Total tokens: \(totalTokens)")
+    }
+}
+
+// Usage
+let tracker = UsageTracker()
+let response = try await client.complete(request)
+tracker.recordUsage(from: response)
+tracker.printSummary()
+```
+
+**Note:** The `usage` property is optional because some API providers or configurations may not return token counts. Always check for nil or use the `totalTokens` convenience property which defaults to 0.
 
 ## Performance Tips
 

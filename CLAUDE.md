@@ -51,6 +51,15 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 5. **Conversation Management**:
    - `ChatConversation`: Utility for managing persistent conversation history
    - Supports both builder pattern and array-based message initialization
+   - Convenience methods: `addUser()`, `addAssistant()`, `addSystem()`, `clear()`
+   - Utility properties: `lastMessageRole`, `messageCount`
+
+6. **Response Convenience Extensions**:
+   - `ChatResponse`: `firstContent`, `firstFinishReason`, `totalTokens`
+   - `ChatDelta`: `firstContent`, `firstFinishReason`
+
+7. **Type Aliases**:
+   - `ChatMessages`: Alias for `[any ChatMessage]` for cleaner type signatures
 
 ### JSON Serialization
 - Uses `CodingKeys` to map Swift camelCase to OpenAI snake_case format
@@ -104,11 +113,19 @@ The test suite uses Swift Testing framework and covers:
 ## File Structure
 ```
 Sources/SwiftChatCompletionsDSL/
-├── SwiftChatCompletionsDSL.swift    # Main implementation
+├── SwiftChatCompletionsDSL.swift           # Main implementation
+├── SwiftChatCompletionsDSL.docc/           # DocC documentation catalog
+│   ├── SwiftChatCompletionsDSL.md          # Main documentation
+│   ├── Architecture.md                      # Technical architecture
+│   ├── DSL.md                               # DSL guide for beginners
+│   └── Usage.md                             # Usage examples
 Tests/SwiftChatCompletionsDSLTests/
-├── SwiftChatCompletionsDSLTests.swift   # Test cases
+├── SwiftChatCompletionsDSLTests.swift      # Test cases
 Spec/
-├── SwiftChatCompletionsDSL.md       # Detailed specification
+├── SwiftChatCompletionsDSL.md              # Detailed specification
+├── DocumentationSpec.md                     # Documentation requirements
+Examples/
+├── ...                                      # Example projects
 ```
 
 The project follows Swift Package Manager conventions with all implementation in a single source file for simplicity, though it could be split into multiple files as the codebase grows.

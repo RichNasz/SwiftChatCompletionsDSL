@@ -83,7 +83,7 @@ let request = try ChatRequest(model: "gpt-4") {
 
 // Get the response
 let response = try await client.complete(request)
-print(response.choices.first?.message.content ?? "No response")
+print(response.firstContent ?? "No response")  // Convenience property
 ```
 
 ## Usage Examples
@@ -111,11 +111,18 @@ let request = try ChatRequest(model: "gpt-4") {
 
 do {
     let response = try await client.complete(request)
-    if let content = response.choices.first?.message.content {
-        print("Assistant: \\(content)")
+    if let content = response.firstContent {  // Convenience property
+        print("Assistant: \(content)")
+    }
+
+    // Access token usage for cost tracking
+    if let usage = response.usage {
+        print("Input tokens: \(usage.promptTokens)")
+        print("Output tokens: \(usage.completionTokens)")
+        print("Total tokens: \(usage.totalTokens)")
     }
 } catch {
-    print("Error: \\(error)")
+    print("Error: \(error)")
 }
 ```
 
@@ -131,7 +138,7 @@ let streamingRequest = try ChatRequest(model: "gpt-4", stream: true) {
 
 print("Assistant: ", terminator: "")
 for await delta in client.stream(streamingRequest) {
-    if let content = delta.choices.first?.delta.content {
+    if let content = delta.firstContent {  // Convenience property
         print(content, terminator: "")
     }
 }
@@ -157,6 +164,33 @@ let request = try ChatRequest(model: "gpt-4") {
 - **RequestTimeout**: How long to wait for server response to individual requests
 - **ResourceTimeout**: Total time for complete resource loading (should be larger than RequestTimeout)
 - **Best Practices**: Use shorter timeouts for user-facing interactions, longer for background processing
+
+### Conversation Management
+
+Use `ChatConversation` to manage multi-turn conversations:
+
+```swift
+var conversation = ChatConversation {
+    TextMessage(role: .system, content: "You are a helpful tutor.")
+}
+
+// Add messages with convenience methods
+conversation.addUser(content: "What is recursion?")
+conversation.addAssistant(content: "Recursion is when a function calls itself...")
+conversation.addUser(content: "Show me an example.")
+
+// Check conversation state
+print("Messages: \(conversation.messageCount)")
+print("Last role: \(conversation.lastMessageRole ?? .user)")
+
+// Generate request from history
+let request = try conversation.request(model: "gpt-4") {
+    try Temperature(0.7)
+}
+
+// Clear when starting fresh
+conversation.clear()
+```
 
 For more comprehensive examples, see the [Examples/](Examples/) folder.
 

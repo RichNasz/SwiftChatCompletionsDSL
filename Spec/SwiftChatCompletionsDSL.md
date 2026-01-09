@@ -258,6 +258,20 @@ To support conversation history, the DSL is extended with:
     }
     ```
   - Purpose: Provides quick access to the most commonly used response data without navigating nested structures. `firstContent` returns the content from the first choice, `firstFinishReason` returns the finish reason, and `totalTokens` returns the total token count (defaulting to 0 if unavailable).
+  - **Token Usage Access Example**:
+    ```swift
+    let response = try await client.complete(request)
+
+    // Access all token counts via the usage property
+    if let usage = response.usage {
+        print("Input tokens: \(usage.promptTokens)")
+        print("Output tokens: \(usage.completionTokens)")
+        print("Total tokens: \(usage.totalTokens)")
+    }
+
+    // Or use convenience property for quick total access
+    print("Total: \(response.totalTokens)")  // Returns 0 if usage unavailable
+    ```
 
 ### 5. Result Builders
 - **ChatBuilder**: Composes message sequences.

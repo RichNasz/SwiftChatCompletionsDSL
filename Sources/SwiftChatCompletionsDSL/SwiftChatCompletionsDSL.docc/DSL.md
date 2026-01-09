@@ -142,10 +142,11 @@ let client = try LLMClient(
 // Send the request
 let response = try await client.complete(request)
 
-// Process the response
-if let content = response.choices.first?.message.content {
-    print("AI Response: \\(content)")
+// Process the response using convenience properties
+if let content = response.firstContent {
+    print("AI Response: \(content)")
 }
+print("Tokens used: \(response.totalTokens)")
 ```
 
 ## Progressive Examples: From Simple to Advanced
@@ -260,6 +261,71 @@ let request = try ChatRequest(model: "gpt-4") {
     // Add new message
     TextMessage(role: .user, content: "Can you explain closures?")
 }
+```
+
+## Managing Conversations with ChatConversation
+
+For multi-turn conversations, the DSL provides `ChatConversation` with convenient utilities:
+
+### Basic Conversation Management
+
+```swift
+// Initialize with a system message
+var conversation = ChatConversation {
+    TextMessage(role: .system, content: "You are a helpful tutor.")
+}
+
+// Add messages using convenience methods
+conversation.addUser(content: "What is recursion?")
+conversation.addAssistant(content: "Recursion is when a function calls itself...")
+conversation.addSystem(content: "Keep explanations simple.")  // Add system messages too!
+
+// Check conversation state
+print("Messages: \(conversation.messageCount)")           // Number of messages
+print("Last role: \(conversation.lastMessageRole ?? .user)")  // Role of last message
+
+// Generate a request from the conversation
+let request = try conversation.request(model: "gpt-4") {
+    try Temperature(0.7)
+}
+
+// Start fresh when needed
+conversation.clear()
+print("After clear: \(conversation.messageCount)")  // 0
+```
+
+### Building a Chat Loop
+
+```swift
+var conversation = ChatConversation {
+    TextMessage(role: .system, content: "You are a helpful assistant.")
+}
+
+let client = try LLMClient(
+    baseURL: "https://api.openai.com/v1/chat/completions",
+    apiKey: "your-api-key"
+)
+
+func chat(_ userMessage: String) async throws {
+    conversation.addUser(content: userMessage)
+
+    let request = try conversation.request(model: "gpt-4") {
+        try Temperature(0.7)
+        try MaxTokens(200)
+    }
+
+    let response = try await client.complete(request)
+
+    if let reply = response.firstContent {
+        print("Assistant: \(reply)")
+        conversation.addAssistant(content: reply)
+    }
+}
+
+// Use it
+try await chat("Hello!")
+try await chat("What's the weather like?")
+print("Total messages: \(conversation.messageCount)")
 ```
 
 ## Common Patterns and Best Practices
