@@ -41,9 +41,9 @@ To support conversation history, the DSL is extended with:
 
 ### 2. Protocols
 - **ChatMessage**: Extensible protocol for messages.
-  - Signature: `protocol ChatMessage: Encodable { var role: Role { get }; var content: any Encodable { get } }`
-  - Purpose: Defines messages with a role and content (text or future multimodal types like images).
-  - JSON: Encodes to `{ "role": String, "content": Any }`.
+  - Signature: `protocol ChatMessage: Encodable, Sendable { var role: Role { get } }`
+  - Purpose: Defines messages with a role. Content structure is left to concrete implementations (e.g., `TextMessage` has `content: String`) to allow flexibility for different message types including multimodal content.
+  - JSON: Concrete implementations encode their specific structure (e.g., `{ "role": String, "content": String }` for TextMessage).
 
 - **ChatConfigParameter**: Protocol for configuration parameters.
   - Signature: `protocol ChatConfigParameter { func apply(to request: inout ChatRequest) }`
@@ -96,6 +96,16 @@ To support conversation history, the DSL is extended with:
     - Signature: `struct Tools: ChatConfigParameter { let value: [Tool]; init(_ value: [Tool]); func apply(to request: inout ChatRequest) }`
     - Validation: None, but assume `Tool` struct with name, description, parameters.
     - Applies: Sets `request.tools = value`.
+  - **RequestTimeout**:
+    - Signature: `struct RequestTimeout: ChatConfigParameter { let value: TimeInterval; init(_ value: TimeInterval) throws; func apply(to request: inout ChatRequest) }`
+    - Validation: Throws `LLMError.invalidValue(String)` if `value` not in `10...900` seconds.
+    - Applies: Sets `request.requestTimeout = value`.
+    - Purpose: Controls individual HTTP request timeouts for server response.
+  - **ResourceTimeout**:
+    - Signature: `struct ResourceTimeout: ChatConfigParameter { let value: TimeInterval; init(_ value: TimeInterval) throws; func apply(to request: inout ChatRequest) }`
+    - Validation: Throws `LLMError.invalidValue(String)` if `value` not in `30...3600` seconds.
+    - Applies: Sets `request.resourceTimeout = value`.
+    - Purpose: Controls complete resource loading timeout including connection, request, and data transfer.
 
 - **ChatRequest**: Represents the API request.
   - Signature:
@@ -114,6 +124,8 @@ To support conversation history, the DSL is extended with:
         var user: String?
         var stop: [String]?  // Additional
         var tools: [Tool]?  // Additional, with Tool struct
+        var requestTimeout: TimeInterval?  // HTTP request timeout (10-900s)
+        var resourceTimeout: TimeInterval?  // Complete resource loading timeout (30-3600s)
 
         init(
             model: String,
@@ -245,7 +257,7 @@ To support conversation history, the DSL is extended with:
   actor LLMClient {
       init(baseURL: String, apiKey: String, sessionConfiguration: URLSessionConfiguration = .default) throws
       func complete(_ request: ChatRequest) async throws -> ChatResponse
-      nonisolated func stream(_ request: ChatRequest) -> AsyncStream<ChatDelta>
+      nonisolated func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatDelta, Error>
   }
   ```
 - Purpose: Manages API calls with thread-safe state (e.g., `private let baseURL`, `private let apiKey`, `private let session: URLSession`).
@@ -380,7 +392,8 @@ To support conversation history, the DSL is extended with:
 - **Concurrency & Sendable**: All types must conform to `Sendable` for Swift 6 strict concurrency. This includes `ChatRequest`, `ChatMessage`, `Role`, `LLMError`, and all response types. For `LLMError`, use string descriptions instead of Error objects to maintain `Equatable` conformance.
 - **Result Builder Configuration**: Config closures must be marked as `() throws -> [ChatConfigParameter]` to allow throwing parameter initialization within the DSL.
 - **Platform Requirements**: Set minimum platforms to `macOS(.v12), iOS(.v15)` in Package.swift for `AsyncStream` and `URLSession.data(for:)` availability.
-- **Streaming**: Parse SSE, handling `data: [DONE]` and errors. Each chunk is valid JSON decoding to `ChatDelta`. Use `@Sendable` closures and capture local values to avoid actor isolation issues.
+- **Streaming**: Parse SSE, handling `data: [DONE]` and errors. Each chunk is valid JSON decoding to `ChatDelta`. Use `@Sendable` closures and capture local values to avoid actor isolation issues. The `stream()` method returns `AsyncThrowingStream<ChatDelta, Error>` to properly propagate errors.
+- **Session Caching**: `LLMClient` uses an internal `SessionCache` actor to cache `URLSession` instances keyed by timeout configuration (requestTimeout + resourceTimeout). This improves performance by reusing sessions for requests with identical timeout settings instead of creating new sessions for each request.
 - **Tool Support**: For `Tool.Function.parameters`, use `[String: String]` instead of `[String: Any]` to maintain `Sendable` conformance. This simplifies JSON schema definitions while maintaining type safety.
 - **Testing**: Support Swift Testing with `#expect` for async tests. Key considerations:
   - Use array-based message initialization for simpler test syntax

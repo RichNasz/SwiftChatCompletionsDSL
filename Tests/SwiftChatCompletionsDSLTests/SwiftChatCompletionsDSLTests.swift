@@ -534,3 +534,584 @@ import Testing
     #expect(request.temperature == 0.6)
     #expect(request.messages.count == 2)
 }
+
+// MARK: - ChatRequest JSON Encoding Tests
+
+@Test func testChatRequestEncoding() throws {
+    let request = try ChatRequest(model: "gpt-4", config: {
+        try Temperature(0.8)
+        try MaxTokens(100)
+        try TopP(0.95)
+        try FrequencyPenalty(0.5)
+        try PresencePenalty(-0.3)
+    }, messages: [
+        TextMessage(role: .system, content: "You are helpful."),
+        TextMessage(role: .user, content: "Hello")
+    ])
+
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(request)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    // Verify model and stream
+    #expect(json?["model"] as? String == "gpt-4")
+    #expect(json?["stream"] as? Bool == false)
+
+    // Verify snake_case conversion for parameters
+    #expect(json?["temperature"] as? Double == 0.8)
+    #expect(json?["max_tokens"] as? Int == 100)
+    #expect(json?["top_p"] as? Double == 0.95)
+    #expect(json?["frequency_penalty"] as? Double == 0.5)
+    #expect(json?["presence_penalty"] as? Double == -0.3)
+
+    // Verify messages array
+    let messages = json?["messages"] as? [[String: Any]]
+    #expect(messages?.count == 2)
+    #expect(messages?[0]["role"] as? String == "system")
+    #expect(messages?[0]["content"] as? String == "You are helpful.")
+    #expect(messages?[1]["role"] as? String == "user")
+    #expect(messages?[1]["content"] as? String == "Hello")
+}
+
+@Test func testChatRequestStreamEncoding() throws {
+    let request = try ChatRequest(model: "gpt-4", stream: true, messages: [
+        TextMessage(role: .user, content: "Test")
+    ])
+
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(request)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["stream"] as? Bool == true)
+}
+
+@Test func testChatRequestOptionalFieldsOmitted() throws {
+    let request = try ChatRequest(model: "gpt-4", messages: [
+        TextMessage(role: .user, content: "Test")
+    ])
+
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(request)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    // Optional fields should not be present when nil
+    #expect(json?["temperature"] == nil)
+    #expect(json?["max_tokens"] == nil)
+    #expect(json?["top_p"] == nil)
+    #expect(json?["frequency_penalty"] == nil)
+    #expect(json?["presence_penalty"] == nil)
+    #expect(json?["n"] == nil)
+    #expect(json?["stop"] == nil)
+    #expect(json?["user"] == nil)
+}
+
+// MARK: - Role Encoding Tests
+
+@Test func testRoleEncoding() throws {
+    let encoder = JSONEncoder()
+
+    let systemMessage = TextMessage(role: .system, content: "Test")
+    let userData = try encoder.encode(systemMessage)
+    let systemJson = try JSONSerialization.jsonObject(with: userData) as? [String: Any]
+    #expect(systemJson?["role"] as? String == "system")
+
+    let userMessage = TextMessage(role: .user, content: "Test")
+    let userJson = try JSONSerialization.jsonObject(with: try encoder.encode(userMessage)) as? [String: Any]
+    #expect(userJson?["role"] as? String == "user")
+
+    let assistantMessage = TextMessage(role: .assistant, content: "Test")
+    let assistantJson = try JSONSerialization.jsonObject(with: try encoder.encode(assistantMessage)) as? [String: Any]
+    #expect(assistantJson?["role"] as? String == "assistant")
+
+    let toolMessage = TextMessage(role: .tool, content: "Test")
+    let toolJson = try JSONSerialization.jsonObject(with: try encoder.encode(toolMessage)) as? [String: Any]
+    #expect(toolJson?["role"] as? String == "tool")
+}
+
+// MARK: - LLMError Tests
+
+@Test func testLLMErrorEquality() {
+    // Same errors should be equal
+    #expect(LLMError.invalidURL == LLMError.invalidURL)
+    #expect(LLMError.rateLimit == LLMError.rateLimit)
+    #expect(LLMError.invalidResponse == LLMError.invalidResponse)
+    #expect(LLMError.missingBaseURL == LLMError.missingBaseURL)
+    #expect(LLMError.missingModel == LLMError.missingModel)
+
+    // Errors with same associated values should be equal
+    #expect(LLMError.encodingFailed("test") == LLMError.encodingFailed("test"))
+    #expect(LLMError.decodingFailed("test") == LLMError.decodingFailed("test"))
+    #expect(LLMError.networkError("test") == LLMError.networkError("test"))
+    #expect(LLMError.invalidValue("test") == LLMError.invalidValue("test"))
+    #expect(LLMError.serverError(statusCode: 500, message: "error") == LLMError.serverError(statusCode: 500, message: "error"))
+
+    // Errors with different associated values should not be equal
+    #expect(LLMError.encodingFailed("a") != LLMError.encodingFailed("b"))
+    #expect(LLMError.serverError(statusCode: 500, message: nil) != LLMError.serverError(statusCode: 400, message: nil))
+
+    // Different error types should not be equal
+    #expect(LLMError.invalidURL != LLMError.rateLimit)
+    #expect(LLMError.networkError("test") != LLMError.decodingFailed("test"))
+}
+
+// MARK: - Specific Error Type Assertions
+
+@Test func testTemperatureThrowsInvalidValue() {
+    #expect(throws: LLMError.invalidValue("Temperature must be between 0.0 and 2.0, got -0.1")) {
+        try Temperature(-0.1)
+    }
+    #expect(throws: LLMError.invalidValue("Temperature must be between 0.0 and 2.0, got 2.5")) {
+        try Temperature(2.5)
+    }
+}
+
+@Test func testMaxTokensThrowsInvalidValue() {
+    #expect(throws: LLMError.invalidValue("MaxTokens must be greater than 0, got 0")) {
+        try MaxTokens(0)
+    }
+    #expect(throws: LLMError.invalidValue("MaxTokens must be greater than 0, got -5")) {
+        try MaxTokens(-5)
+    }
+}
+
+@Test func testTopPThrowsInvalidValue() {
+    #expect(throws: LLMError.invalidValue("TopP must be between 0.0 and 1.0, got -0.1")) {
+        try TopP(-0.1)
+    }
+    #expect(throws: LLMError.invalidValue("TopP must be between 0.0 and 1.0, got 1.5")) {
+        try TopP(1.5)
+    }
+}
+
+@Test func testUserThrowsInvalidValue() {
+    #expect(throws: LLMError.invalidValue("User identifier cannot be empty")) {
+        try User("")
+    }
+}
+
+@Test func testStopThrowsInvalidValue() {
+    #expect(throws: LLMError.invalidValue("Stop sequences array cannot be empty")) {
+        try Stop([])
+    }
+}
+
+// MARK: - PresencePenalty Validation Tests
+
+@Test func testPresencePenaltyValidation() throws {
+    // Valid presence penalty values
+    _ = try PresencePenalty(-2.0)
+    _ = try PresencePenalty(0.0)
+    _ = try PresencePenalty(2.0)
+
+    // Invalid presence penalty values
+    #expect(throws: LLMError.invalidValue("PresencePenalty must be between -2.0 and 2.0, got -2.1")) {
+        try PresencePenalty(-2.1)
+    }
+    #expect(throws: LLMError.invalidValue("PresencePenalty must be between -2.0 and 2.0, got 2.1")) {
+        try PresencePenalty(2.1)
+    }
+}
+
+// MARK: - N Parameter Validation Tests
+
+@Test func testNParameterValidation() throws {
+    // Valid N values
+    _ = try N(1)
+    _ = try N(5)
+    _ = try N(100)
+
+    // Invalid N values
+    #expect(throws: LLMError.invalidValue("N must be greater than 0, got 0")) {
+        try N(0)
+    }
+    #expect(throws: LLMError.invalidValue("N must be greater than 0, got -1")) {
+        try N(-1)
+    }
+}
+
+// MARK: - Tool Encoding Tests
+
+@Test func testToolEncoding() throws {
+    let function = Tool.Function(
+        name: "get_weather",
+        description: "Get weather for a location",
+        parameters: ["location": "string", "unit": "celsius"]
+    )
+    let tool = Tool(function: function)
+
+    let encoder = JSONEncoder()
+    let data = try encoder.encode(tool)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["type"] as? String == "function")
+
+    let functionJson = json?["function"] as? [String: Any]
+    #expect(functionJson?["name"] as? String == "get_weather")
+    #expect(functionJson?["description"] as? String == "Get weather for a location")
+
+    let params = functionJson?["parameters"] as? [String: String]
+    #expect(params?["location"] == "string")
+    #expect(params?["unit"] == "celsius")
+}
+
+// MARK: - Mock URLProtocol for Network Tests
+
+class MockURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        return true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        return request
+    }
+
+    override func startLoading() {
+        guard let handler = MockURLProtocol.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.unknown))
+            return
+        }
+
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+// MARK: - LLMClient Network Tests (Serialized to avoid shared state conflicts)
+
+@Suite(.serialized)
+struct LLMClientNetworkTests {
+
+    @Test func completeSuccess() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let responseJson = """
+        {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            // Verify request headers
+            #expect(request.httpMethod == "POST")
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key")
+            #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, responseJson.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "gpt-4", messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        let response = try await client.complete(request)
+
+        #expect(response.id == "chatcmpl-test")
+        #expect(response.choices.count == 1)
+        #expect(response.choices[0].message.content == "Hello!")
+    }
+
+    @Test func completeRateLimitError() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 429,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "gpt-4", messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        do {
+            _ = try await client.complete(request)
+            #expect(Bool(false), "Should have thrown rateLimit error")
+        } catch LLMError.rateLimit {
+            // Expected
+        } catch {
+            #expect(Bool(false), "Wrong error type: \(error)")
+        }
+    }
+
+    @Test func completeServerError() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, "Internal Server Error".data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "gpt-4", messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        do {
+            _ = try await client.complete(request)
+            #expect(Bool(false), "Should have thrown serverError")
+        } catch LLMError.serverError(let statusCode, let message) {
+            #expect(statusCode == 500)
+            #expect(message == "Internal Server Error")
+        } catch {
+            #expect(Bool(false), "Wrong error type: \(error)")
+        }
+    }
+
+    @Test func invalidURL() async throws {
+        // URL with spaces returns nil from URL(string:)
+        let client = try LLMClient(
+            baseURL: "https://invalid url with spaces",
+            apiKey: "test-key"
+        )
+
+        let request = try ChatRequest(model: "gpt-4", messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        do {
+            _ = try await client.complete(request)
+            #expect(Bool(false), "Should have thrown invalidURL error")
+        } catch LLMError.invalidURL {
+            // Expected
+        } catch {
+            #expect(Bool(false), "Wrong error type: \(error)")
+        }
+    }
+
+    // MARK: - Stream Method Tests
+
+    @Test func streamSuccess() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        // Simulate SSE stream with multiple deltas
+        let sseData = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{"content":" world"},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{"content":"!"},"finish_reason":"stop"}]}
+
+        data: [DONE]
+
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            // Verify streaming headers
+            #expect(request.httpMethod == "POST")
+            #expect(request.value(forHTTPHeaderField: "Accept") == "text/event-stream")
+
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, sseData.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "gpt-4", stream: true, messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        var deltas: [ChatDelta] = []
+        for try await delta in client.stream(request) {
+            deltas.append(delta)
+        }
+
+        #expect(deltas.count == 3)
+        #expect(deltas[0].choices[0].delta.content == "Hello")
+        #expect(deltas[1].choices[0].delta.content == " world")
+        #expect(deltas[2].choices[0].delta.content == "!")
+        #expect(deltas[2].choices[0].finishReason == "stop")
+    }
+
+    @Test func streamRateLimitError() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 429,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "gpt-4", stream: true, messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        do {
+            for try await _ in client.stream(request) {
+                #expect(Bool(false), "Should not yield any deltas")
+            }
+            #expect(Bool(false), "Should have thrown rateLimit error")
+        } catch LLMError.rateLimit {
+            // Expected
+        } catch {
+            #expect(Bool(false), "Wrong error type: \(error)")
+        }
+    }
+
+    @Test func streamServerError() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 503,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data())
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "gpt-4", stream: true, messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        do {
+            for try await _ in client.stream(request) {
+                #expect(Bool(false), "Should not yield any deltas")
+            }
+            #expect(Bool(false), "Should have thrown serverError")
+        } catch LLMError.serverError(let statusCode, _) {
+            #expect(statusCode == 503)
+        } catch {
+            #expect(Bool(false), "Wrong error type: \(error)")
+        }
+    }
+
+    @Test func streamInvalidURL() async throws {
+        let client = try LLMClient(
+            baseURL: "https://invalid url with spaces",
+            apiKey: "test-key"
+        )
+
+        let request = try ChatRequest(model: "gpt-4", stream: true, messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        do {
+            for try await _ in client.stream(request) {
+                #expect(Bool(false), "Should not yield any deltas")
+            }
+            #expect(Bool(false), "Should have thrown invalidURL error")
+        } catch LLMError.invalidURL {
+            // Expected
+        } catch {
+            #expect(Bool(false), "Wrong error type: \(error)")
+        }
+    }
+
+    @Test func streamEmptyResponse() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        // Just the DONE signal, no actual content
+        let sseData = "data: [DONE]\n\n"
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, sseData.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "gpt-4", stream: true, messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        var deltas: [ChatDelta] = []
+        for try await delta in client.stream(request) {
+            deltas.append(delta)
+        }
+
+        #expect(deltas.isEmpty)
+    }
+}

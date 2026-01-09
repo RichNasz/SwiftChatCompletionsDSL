@@ -8,6 +8,11 @@
 
 import Foundation
 
+// MARK: - Type Aliases
+
+/// Type alias for an array of chat messages
+public typealias ChatMessages = [any ChatMessage]
+
 // MARK: - Core Enums
 
 /// Defines message roles for chat completions.
@@ -76,33 +81,6 @@ public enum LLMError: Error, Equatable {
 	case missingBaseURL
 	/// Model name is missing or empty
 	case missingModel
-	
-	public static func == (lhs: LLMError, rhs: LLMError) -> Bool {
-		switch (lhs, rhs) {
-			case (.invalidURL, .invalidURL):
-				return true
-			case (.encodingFailed(let lhsMessage), .encodingFailed(let rhsMessage)):
-				return lhsMessage == rhsMessage
-			case (.networkError(let lhsMessage), .networkError(let rhsMessage)):
-				return lhsMessage == rhsMessage
-			case (.decodingFailed(let lhsMessage), .decodingFailed(let rhsMessage)):
-				return lhsMessage == rhsMessage
-			case (.serverError(let lhsCode, let lhsMessage), .serverError(let rhsCode, let rhsMessage)):
-				return lhsCode == rhsCode && lhsMessage == rhsMessage
-			case (.rateLimit, .rateLimit):
-				return true
-			case (.invalidResponse, .invalidResponse):
-				return true
-			case (.invalidValue(let lhsMessage), .invalidValue(let rhsMessage)):
-				return lhsMessage == rhsMessage
-			case (.missingBaseURL, .missingBaseURL):
-				return true
-			case (.missingModel, .missingModel):
-				return true
-			default:
-				return false
-		}
-	}
 }
 
 // MARK: - Protocols
@@ -215,17 +193,6 @@ public struct TextMessage: ChatMessage, Sendable {
 	public init(role: Role, content: String) {
 		self.role = role
 		self.content = content
-	}
-	
-	private enum CodingKeys: String, CodingKey {
-		case role
-		case content
-	}
-	
-	public func encode(to encoder: Encoder) throws {
-		var container = encoder.container(keyedBy: CodingKeys.self)
-		try container.encode(role, forKey: .role)
-		try container.encode(content, forKey: .content)
 	}
 }
 
@@ -373,6 +340,8 @@ public struct TopP: ChatConfigParameter {
 		request.topP = value
 	}
 }
+
+// MARK: Penalty Parameters
 
 /// Reduces repetition by penalizing tokens based on their frequency in the text so far.
 ///
@@ -721,6 +690,8 @@ public struct Stop: ChatConfigParameter {
 	}
 }
 
+// MARK: Timeout Parameters
+
 /// Configures the timeout for individual HTTP requests.
 ///
 /// Request timeout controls how long to wait for the server to respond to individual HTTP requests.
@@ -955,24 +926,6 @@ public struct Tool: Codable, Sendable {
 			self.name = name
 			self.description = description
 			self.parameters = parameters
-		}
-		
-		private enum CodingKeys: String, CodingKey {
-			case name, description, parameters
-		}
-		
-		public func encode(to encoder: Encoder) throws {
-			var container = encoder.container(keyedBy: CodingKeys.self)
-			try container.encode(name, forKey: .name)
-			try container.encode(description, forKey: .description)
-			try container.encode(parameters, forKey: .parameters)
-		}
-		
-		public init(from decoder: Decoder) throws {
-			let container = try decoder.container(keyedBy: CodingKeys.self)
-			name = try container.decode(String.self, forKey: .name)
-			description = try container.decode(String.self, forKey: .description)
-			parameters = try container.decode([String: String].self, forKey: .parameters)
 		}
 	}
 	
@@ -1559,6 +1512,38 @@ public struct ChatRequest: Encodable, Sendable {
 		}
 	}
 	
+	/// Creates a new chat completion request with messages only (no configuration).
+	///
+	/// Use this simplified initializer when you don't need to specify any configuration
+	/// parameters and want clean, minimal syntax.
+	///
+	/// ## Example Usage
+	/// ```swift
+	/// // Simple request with builder syntax
+	/// let request = try ChatRequest(model: "gpt-4") {
+	///     TextMessage(role: .user, content: "Hello!")
+	/// }
+	///
+	/// // Streaming request
+	/// let streamRequest = try ChatRequest(model: "gpt-4", stream: true) {
+	///     TextMessage(role: .system, content: "You are helpful.")
+	///     TextMessage(role: .user, content: "Hi!")
+	/// }
+	/// ```
+	///
+	/// - Parameters:
+	///   - model: The model identifier (cannot be empty)
+	///   - stream: Whether to stream the response (defaults to false)
+	///   - messages: Messages using ChatBuilder
+	/// - Throws: ``LLMError/missingModel`` if model is empty
+	public init(
+		model: String,
+		stream: Bool = false,
+		@ChatBuilder messages: () -> [any ChatMessage]
+	) throws {
+		try self.init(model: model, stream: stream, config: {}, messages: messages)
+	}
+
 	/// Creates a new chat completion request with a pre-built message array.
 	///
 	/// Use this initializer when you have dynamically constructed messages
@@ -1863,7 +1848,36 @@ public struct ChatConversation {
 	public mutating func addAssistant(content: String) {
 		add(message: TextMessage(role: .assistant, content: content))
 	}
-	
+
+	/// Adds a system message to the conversation history.
+	///
+	/// Convenience method for adding system instructions or context.
+	///
+	/// ## Example Usage
+	/// ```swift
+	/// conversation.addSystem(content: "You are a helpful assistant.")
+	/// ```
+	///
+	/// - Parameter content: The text content of the system message
+	public mutating func addSystem(content: String) {
+		add(message: TextMessage(role: .system, content: content))
+	}
+
+	/// Returns the role of the last message in the conversation, or nil if empty.
+	public var lastMessageRole: Role? {
+		history.last?.role
+	}
+
+	/// Returns the number of messages in the conversation history.
+	public var messageCount: Int {
+		history.count
+	}
+
+	/// Clears all messages from the conversation history.
+	public mutating func clear() {
+		history.removeAll()
+	}
+
 	/// Generates a ChatRequest using the conversation history plus optional additional messages.
 	///
 	/// This method combines the conversation history with optional additional messages
@@ -1916,28 +1930,47 @@ public struct ChatResponse: Decodable, Sendable {
 	public let choices: [Choice]
 	public let usage: Usage?
 	
+	/// Represents a single completion choice from the model.
+	///
+	/// When using the `n` parameter, the API may return multiple choices,
+	/// each representing a different completion for the same prompt.
 	public struct Choice: Decodable, Sendable {
+		/// Index of this choice in the choices array (0-based)
 		public let index: Int
+		/// The message content and role for this choice
 		public let message: Message
+		/// Why the model stopped generating: "stop", "length", "content_filter", or nil if still generating
 		public let finishReason: String?
-		
+
 		private enum CodingKeys: String, CodingKey {
 			case index
 			case message
 			case finishReason = "finish_reason"
 		}
 	}
-	
+
+	/// Represents a message in the API response.
+	///
+	/// Contains the role (typically "assistant") and the text content
+	/// generated by the model.
 	public struct Message: Decodable, Sendable {
+		/// The role of the message sender (typically "assistant" for responses)
 		public let role: Role
+		/// The text content of the message
 		public let content: String
 	}
-	
+
+	/// Token usage statistics for the API request.
+	///
+	/// Useful for tracking costs and monitoring token consumption.
 	public struct Usage: Decodable, Sendable {
+		/// Number of tokens in the input prompt
 		public let promptTokens: Int
+		/// Number of tokens in the generated completion
 		public let completionTokens: Int
+		/// Total tokens used (prompt + completion)
 		public let totalTokens: Int
-		
+
 		private enum CodingKeys: String, CodingKey {
 			case promptTokens = "prompt_tokens"
 			case completionTokens = "completion_tokens"
@@ -1946,25 +1979,82 @@ public struct ChatResponse: Decodable, Sendable {
 	}
 }
 
-/// Delta structure for streaming completions
+/// Incremental response structure for streaming chat completions.
+///
+/// When streaming is enabled, the API returns a sequence of `ChatDelta` objects,
+/// each containing a small piece of the generated response. Use these deltas
+/// to build up the complete response incrementally for real-time display.
+///
+/// ## Example Usage
+/// ```swift
+/// var fullResponse = ""
+/// for await delta in client.stream(request) {
+///     if let content = delta.firstContent {
+///         fullResponse += content
+///         print(content, terminator: "")
+///     }
+/// }
+/// ```
 public struct ChatDelta: Decodable, Sendable {
+	/// Array of delta choices (typically one element for streaming)
 	public let choices: [DeltaChoice]
-	
+
+	/// Represents a single streaming choice with incremental content.
 	public struct DeltaChoice: Decodable, Sendable {
+		/// Index of this choice in the choices array (0-based)
 		public let index: Int
+		/// The incremental content for this chunk
 		public let delta: Delta
+		/// Why the model stopped: "stop", "length", etc., or nil if still generating
 		public let finishReason: String?
-		
+
 		private enum CodingKeys: String, CodingKey {
 			case index
 			case delta
 			case finishReason = "finish_reason"
 		}
-		
+
+		/// Incremental content chunk from streaming response.
+		///
+		/// Contains the partial content and optionally the role (typically only
+		/// in the first delta of a stream).
 		public struct Delta: Decodable, Sendable {
+			/// The incremental text content, or nil if this chunk contains no text
 			public let content: String?
+			/// The role of the message (typically only present in the first delta)
 			public let role: Role?
 		}
+	}
+}
+
+// MARK: - Response Convenience Extensions
+
+extension ChatResponse {
+	/// Returns the first choice's message content, or nil if no choices exist.
+	public var firstContent: String? {
+		choices.first?.message.content
+	}
+
+	/// Returns the finish reason of the first choice, or nil if no choices exist.
+	public var firstFinishReason: String? {
+		choices.first?.finishReason
+	}
+
+	/// Returns total token usage, or 0 if usage data is unavailable.
+	public var totalTokens: Int {
+		usage?.totalTokens ?? 0
+	}
+}
+
+extension ChatDelta {
+	/// Returns the first choice's content delta, or nil if no content in this delta.
+	public var firstContent: String? {
+		choices.first?.delta.content
+	}
+
+	/// Returns the first choice's finish reason, or nil if not finished.
+	public var firstFinishReason: String? {
+		choices.first?.finishReason
 	}
 }
 
@@ -2101,6 +2191,7 @@ public actor LLMClient {
 	/// Thread-safe cache for URLSession instances keyed by timeout configuration
 	private actor SessionCache {
 		private var cache: [String: URLSession] = [:]
+		private let maxCacheSize = 10
 
 		func getSession(requestTimeout: TimeInterval?, resourceTimeout: TimeInterval?, defaultSession: URLSession) -> URLSession {
 			// Use default session if no custom timeouts
@@ -2111,6 +2202,11 @@ public actor LLMClient {
 			let key = "\(requestTimeout ?? 0)-\(resourceTimeout ?? 0)"
 			if let cached = cache[key] {
 				return cached
+			}
+
+			// Evict oldest entry if cache is full
+			if cache.count >= maxCacheSize, let firstKey = cache.keys.first {
+				cache.removeValue(forKey: firstKey)
 			}
 
 			// Create optimized configuration for streaming
@@ -2132,7 +2228,53 @@ public actor LLMClient {
 
 	/// Shared session cache instance
 	private static let sessionCache = SessionCache()
-	
+
+	/// Creates a URLRequest configured for chat completions API.
+	/// - Parameters:
+	///   - baseURL: The endpoint URL string
+	///   - apiKey: API key for Bearer authentication
+	///   - acceptSSE: If true, adds Accept header for server-sent events
+	/// - Returns: Configured URLRequest
+	/// - Throws: LLMError.invalidURL if the URL string is malformed
+	private nonisolated static func createURLRequest(
+		baseURL: String,
+		apiKey: String,
+		acceptSSE: Bool = false
+	) throws -> URLRequest {
+		guard let url = URL(string: baseURL) else {
+			throw LLMError.invalidURL
+		}
+		var urlRequest = URLRequest(url: url)
+		urlRequest.httpMethod = "POST"
+		urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+		urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+		if acceptSSE {
+			urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+		}
+		return urlRequest
+	}
+
+	/// Validates HTTP response status code and returns appropriate error if failed.
+	/// - Parameters:
+	///   - response: The URLResponse to validate
+	///   - data: Optional response data for error message extraction
+	/// - Returns: LLMError if status indicates failure, nil if successful
+	private nonisolated static func validateHTTPStatus(
+		_ response: URLResponse?,
+		data: Data = Data()
+	) -> LLMError? {
+		guard let httpResponse = response as? HTTPURLResponse else { return nil }
+		switch httpResponse.statusCode {
+		case 200...299:
+			return nil
+		case 429:
+			return .rateLimit
+		default:
+			let errorMessage = String(data: data, encoding: .utf8)
+			return .serverError(statusCode: httpResponse.statusCode, message: errorMessage)
+		}
+	}
+
 	/// Creates a new LLM client for making chat completion requests.
 	///
 	/// The client is configured with a base URL pointing to a chat completions endpoint
@@ -2259,15 +2401,8 @@ public actor LLMClient {
 	/// - Returns: Complete chat response with all choices and metadata
 	/// - Throws: ``LLMError`` for various failure scenarios including network, server, and encoding errors
 	public func complete(_ request: ChatRequest) async throws -> ChatResponse {
-		guard let url = URL(string: baseURL) else {
-			throw LLMError.invalidURL
-		}
-		
-		var urlRequest = URLRequest(url: url)
-		urlRequest.httpMethod = "POST"
-		urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-		urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-		
+		var urlRequest = try Self.createURLRequest(baseURL: baseURL, apiKey: apiKey)
+
 		do {
 			let requestData = try JSONEncoder().encode(request)
 			urlRequest.httpBody = requestData
@@ -2284,21 +2419,13 @@ public actor LLMClient {
 
 		do {
 			let (data, response) = try await sessionToUse.data(for: urlRequest)
-			
-			if let httpResponse = response as? HTTPURLResponse {
-				switch httpResponse.statusCode {
-					case 200...299:
-						break
-					case 429:
-						throw LLMError.rateLimit
-					default:
-						let errorMessage = String(data: data, encoding: .utf8)
-						throw LLMError.serverError(statusCode: httpResponse.statusCode, message: errorMessage)
-				}
+
+			if let error = Self.validateHTTPStatus(response, data: data) {
+				throw error
 			}
-			
+
 			do {
-				return try JSONDecoder().decode(ChatResponse.self, from: data)
+				return try Self.jsonDecoder.decode(ChatResponse.self, from: data)
 			} catch {
 				throw LLMError.decodingFailed(error.localizedDescription)
 			}
@@ -2425,17 +2552,8 @@ public actor LLMClient {
 		return AsyncThrowingStream { continuation in
 			Task { @Sendable in
 				do {
-					guard let url = URL(string: baseURL) else {
-						continuation.finish(throwing: LLMError.invalidURL)
-						return
-					}
-					
-					var urlRequest = URLRequest(url: url)
-					urlRequest.httpMethod = "POST"
-					urlRequest.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-					urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-					urlRequest.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-					
+					var urlRequest = try Self.createURLRequest(baseURL: baseURL, apiKey: apiKey, acceptSSE: true)
+
 					let requestData = try JSONEncoder().encode(request)
 					urlRequest.httpBody = requestData
 
@@ -2447,25 +2565,25 @@ public actor LLMClient {
 					)
 
 					let (asyncBytes, response) = try await sessionToUse.bytes(for: urlRequest)
-					
-					if let httpResponse = response as? HTTPURLResponse {
-						switch httpResponse.statusCode {
-							case 200...299:
-								break
-							case 429:
-								continuation.finish(throwing: LLMError.rateLimit)
-								return
-							default:
-								continuation.finish(throwing: LLMError.serverError(statusCode: httpResponse.statusCode, message: nil))
-								return
-						}
+
+					if let error = Self.validateHTTPStatus(response) {
+						continuation.finish(throwing: error)
+						return
 					}
 					
 					var buffer = ""
+					let maxBufferSize = 1_000_000 // 1MB safety limit for malformed streams
+
 					for try await byte in asyncBytes {
 						let character = Character(UnicodeScalar(byte))
 						buffer.append(character)
-						
+
+						// Safety check for malformed streams that don't send proper delimiters
+						if buffer.count > maxBufferSize {
+							continuation.finish(throwing: LLMError.networkError("SSE buffer exceeded maximum size"))
+							return
+						}
+
 						// Process complete SSE events (separated by \n\n)
 						while let eventRange = buffer.range(of: "\n\n") {
 							let event = String(buffer[..<eventRange.lowerBound])
@@ -2482,13 +2600,8 @@ public actor LLMClient {
 									}
 									
 									if let jsonData = data.data(using: .utf8) {
-										do {
-											let delta = try Self.jsonDecoder.decode(ChatDelta.self, from: jsonData)
-											continuation.yield(delta)
-										} catch {
-											// Continue processing other deltas even if one fails
-											continue
-										}
+										let delta = try Self.jsonDecoder.decode(ChatDelta.self, from: jsonData)
+										continuation.yield(delta)
 									}
 								}
 							}
@@ -2498,6 +2611,8 @@ public actor LLMClient {
 					continuation.finish()
 				} catch let error as LLMError {
 					continuation.finish(throwing: error)
+				} catch let error as DecodingError {
+					continuation.finish(throwing: LLMError.decodingFailed(error.localizedDescription))
 				} catch {
 					continuation.finish(throwing: LLMError.networkError(error.localizedDescription))
 				}
