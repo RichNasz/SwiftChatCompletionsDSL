@@ -1581,6 +1581,55 @@ public struct ChatConfigBuilder {
 	}
 }
 
+/// Result builder for composing tool arrays declaratively.
+///
+/// ``ToolsBuilder`` enables listing tools inline when constructing a ``ChatRequest``,
+/// supporting conditionals and loops just like other result builders in the DSL.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") {
+///     try Temperature(0.7)
+/// } tools: {
+///     Tool(function: Tool.Function(
+///         name: "get_weather",
+///         description: "Get weather for a city",
+///         parameters: .object(properties: ["city": .string()], required: ["city"])
+///     ))
+///     if enableCalculator {
+///         calculatorTool
+///     }
+/// } messages: {
+///     TextMessage(role: .user, content: "Hello")
+/// }
+/// ```
+@resultBuilder
+public struct ToolsBuilder {
+	public static func buildBlock(_ components: Tool...) -> [Tool] {
+		Array(components)
+	}
+
+	public static func buildEither(first: [Tool]) -> [Tool] {
+		first
+	}
+
+	public static func buildEither(second: [Tool]) -> [Tool] {
+		second
+	}
+
+	public static func buildOptional(_ component: [Tool]?) -> [Tool] {
+		component ?? []
+	}
+
+	public static func buildArray(_ components: [[Tool]]) -> [Tool] {
+		components.flatMap { $0 }
+	}
+
+	public static func buildLimitedAvailability(_ component: [Tool]) -> [Tool] {
+		component
+	}
+}
+
 // MARK: - Core Data Structures
 
 /// Represents a complete API request for chat completions with model, configuration, and messages.
@@ -1841,7 +1890,74 @@ public struct ChatRequest: Encodable, Sendable {
 			parameter.apply(to: &self)
 		}
 	}
-	
+
+	/// Creates a chat request with inline tool definitions and optional tool choice.
+	///
+	/// Use this initializer when you want to declare tools alongside configuration
+	/// and messages in a single, readable call site.
+	///
+	/// ## Example Usage
+	/// ```swift
+	/// let request = try ChatRequest(model: "gpt-4", toolChoice: .auto) {
+	///     try Temperature(0.7)
+	/// } tools: {
+	///     Tool(function: Tool.Function(
+	///         name: "get_weather",
+	///         description: "Get weather for a city",
+	///         parameters: .object(
+	///             properties: ["city": .string(description: "City name")],
+	///             required: ["city"]
+	///         )
+	///     ))
+	/// } messages: {
+	///     TextMessage(role: .user, content: "What's the weather?")
+	/// }
+	/// ```
+	///
+	/// - Parameters:
+	///   - model: The model identifier (cannot be empty)
+	///   - stream: Whether to stream the response (defaults to false)
+	///   - toolChoice: Optional tool choice strategy
+	///   - config: Configuration parameters using ChatConfigBuilder
+	///   - tools: Tool definitions using ToolsBuilder
+	///   - messages: Messages using ChatBuilder
+	/// - Throws: ``LLMError/missingModel`` if model is empty, or parameter validation errors
+	public init(
+		model: String,
+		stream: Bool = false,
+		toolChoice: ToolChoice? = nil,
+		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+		@ToolsBuilder tools: () -> [Tool],
+		@ChatBuilder messages: () -> [any ChatMessage]
+	) throws {
+		try self.init(model: model, stream: stream, config: config, messages: messages())
+		self.tools = tools()
+		self.toolChoice = toolChoice
+	}
+
+	/// Creates a chat request with inline tool definitions and a pre-built message array.
+	///
+	/// - Parameters:
+	///   - model: The model identifier (cannot be empty)
+	///   - stream: Whether to stream the response (defaults to false)
+	///   - toolChoice: Optional tool choice strategy
+	///   - config: Configuration parameters using ChatConfigBuilder
+	///   - tools: Tool definitions using ToolsBuilder
+	///   - messages: Pre-built array of ChatMessage instances
+	/// - Throws: ``LLMError/missingModel`` if model is empty, or parameter validation errors
+	public init(
+		model: String,
+		stream: Bool = false,
+		toolChoice: ToolChoice? = nil,
+		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+		@ToolsBuilder tools: () -> [Tool],
+		messages: [any ChatMessage]
+	) throws {
+		try self.init(model: model, stream: stream, config: config, messages: messages)
+		self.tools = tools()
+		self.toolChoice = toolChoice
+	}
+
 	private enum CodingKeys: String, CodingKey {
 		case model
 		case messages

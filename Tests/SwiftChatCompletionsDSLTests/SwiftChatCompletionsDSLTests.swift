@@ -1639,6 +1639,73 @@ struct AllNetworkTests {
     #expect(request.toolChoice == .required)
 }
 
+// MARK: - ChatRequest Tools Builder Tests
+
+@Test func testChatRequestToolsBuilder() throws {
+    let request = try ChatRequest(model: "gpt-4", toolChoice: .auto) {
+        try Temperature(0.7)
+    } tools: {
+        Tool(function: Tool.Function(
+            name: "get_weather",
+            description: "Get weather",
+            parameters: .object(properties: ["city": .string()], required: ["city"])
+        ))
+        Tool(function: Tool.Function(
+            name: "calculate",
+            description: "Calculate",
+            parameters: .object(properties: ["expr": .string()], required: ["expr"])
+        ))
+    } messages: {
+        TextMessage(role: .user, content: "Hello")
+    }
+
+    #expect(request.tools?.count == 2)
+    #expect(request.tools?[0].function.name == "get_weather")
+    #expect(request.tools?[1].function.name == "calculate")
+    #expect(request.toolChoice == .auto)
+}
+
+@Test func testChatRequestToolsBuilderWithArrayMessages() throws {
+    let messages: [any ChatMessage] = [
+        TextMessage(role: .user, content: "Hello"),
+    ]
+
+    let searchTool = Tool(function: Tool.Function(
+        name: "search",
+        description: "Search",
+        parameters: .object(properties: ["q": .string()], required: ["q"])
+    ))
+
+    var request = try ChatRequest(model: "gpt-4", messages: messages)
+    request.tools = [searchTool]
+    request.toolChoice = .function("search")
+
+    #expect(request.tools?.count == 1)
+    #expect(request.toolChoice == .function("search"))
+}
+
+@Test func testChatRequestToolsBuilderEncoding() throws {
+    let request = try ChatRequest(model: "gpt-4", toolChoice: .required) {
+    } tools: {
+        Tool(function: Tool.Function(
+            name: "test_tool",
+            description: "A test tool",
+            parameters: .object(properties: [:], required: [])
+        ))
+    } messages: {
+        TextMessage(role: .user, content: "Test")
+    }
+
+    let data = try JSONEncoder().encode(request)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    let tools = json?["tools"] as? [[String: Any]]
+    #expect(tools?.count == 1)
+    let function = tools?[0]["function"] as? [String: Any]
+    #expect(function?["name"] as? String == "test_tool")
+    #expect(json?["tool_choice"] as? String == "required")
+}
+
 // MARK: - ToolSession Integration Tests
 
 struct ToolSessionTests {
