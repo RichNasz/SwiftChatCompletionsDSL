@@ -1706,6 +1706,276 @@ struct AllNetworkTests {
     #expect(json?["tool_choice"] as? String == "required")
 }
 
+// MARK: - Convenience Message Tests
+
+@Test func testSystemConvenienceFunction() {
+    let msg = System("You are helpful.")
+    #expect(msg.role == .system)
+    #expect(msg.content == "You are helpful.")
+}
+
+@Test func testUserMessageConvenienceFunction() {
+    let msg = UserMessage("Hello!")
+    #expect(msg.role == .user)
+    #expect(msg.content == "Hello!")
+}
+
+@Test func testConvenienceMessagesInChatBuilder() throws {
+    let request = try ChatRequest(model: "gpt-4") {
+        try Temperature(0.7)
+    } messages: {
+        System("You are a helpful assistant.")
+        UserMessage("Explain Swift.")
+    }
+
+    #expect(request.messages.count == 2)
+    #expect(request.messages[0].role == .system)
+    #expect(request.messages[1].role == .user)
+}
+
+@Test func testBackwardCompatibilityOldChatRequest() throws {
+    // Existing code patterns should still compile and work
+    let request = try ChatRequest(model: "gpt-4") {
+        try Temperature(0.7)
+        try MaxTokens(150)
+    } messages: {
+        TextMessage(role: .system, content: "System prompt")
+        TextMessage(role: .user, content: "User message")
+    }
+
+    #expect(request.model == "gpt-4")
+    #expect(request.temperature == 0.7)
+    #expect(request.maxTokens == 150)
+    #expect(request.messages.count == 2)
+    #expect(request.tools == nil)
+    #expect(request.toolChoice == nil)
+}
+
+@Test func testBackwardCompatibilityArrayMessages() throws {
+    let messages: [any ChatMessage] = [
+        TextMessage(role: .system, content: "System"),
+        TextMessage(role: .user, content: "User"),
+    ]
+
+    let request = try ChatRequest(
+        model: "gpt-4",
+        config: { try Temperature(0.5) },
+        messages: messages
+    )
+
+    #expect(request.messages.count == 2)
+    #expect(request.temperature == 0.5)
+}
+
+// MARK: - Assistant Convenience Tests
+
+@Test func testAssistantConvenienceFunction() {
+    let msg = Assistant("Hello there!")
+    #expect(msg.role == .assistant)
+    #expect(msg.content == "Hello there!")
+}
+
+@Test func testAssistantInChatBuilder() throws {
+    let request = try ChatRequest(model: "gpt-4") {
+    } messages: {
+        System("You are a helpful assistant.")
+        UserMessage("What is 2+2?")
+        Assistant("4")
+        UserMessage("And 3+3?")
+    }
+
+    #expect(request.messages.count == 4)
+    #expect(request.messages[0].role == .system)
+    #expect(request.messages[1].role == .user)
+    #expect(request.messages[2].role == .assistant)
+    #expect(request.messages[3].role == .user)
+}
+
+// MARK: - ToolCall.decodeArguments Tests
+
+@Test func testDecodeArgumentsSuccess() throws {
+    struct WeatherArgs: Decodable {
+        let location: String
+        let unit: String
+    }
+
+    let toolCall = ToolCall(
+        id: "call_1",
+        function: ToolCall.FunctionCall(
+            name: "get_weather",
+            arguments: "{\"location\":\"Paris\",\"unit\":\"celsius\"}"
+        )
+    )
+
+    let args: WeatherArgs = try toolCall.decodeArguments()
+    #expect(args.location == "Paris")
+    #expect(args.unit == "celsius")
+}
+
+@Test func testDecodeArgumentsInvalidJSON() {
+    let toolCall = ToolCall(
+        id: "call_1",
+        function: ToolCall.FunctionCall(
+            name: "test",
+            arguments: "not valid json"
+        )
+    )
+
+    #expect(throws: LLMError.self) {
+        try toolCall.decodeArguments([String: String].self)
+    }
+}
+
+// MARK: - ToolCallAccumulator Tests
+
+@Test func testToolCallAccumulatorBasic() {
+    var accumulator = ToolCallAccumulator()
+
+    // First chunk: id, name, start of arguments
+    accumulator.append(ToolCallDelta(
+        index: 0,
+        id: "call_1",
+        type: "function",
+        function: ToolCallDelta.FunctionCallDelta(name: "get_weather", arguments: "{\"loc")
+    ))
+
+    // Second chunk: more arguments
+    accumulator.append(ToolCallDelta(
+        index: 0,
+        function: ToolCallDelta.FunctionCallDelta(arguments: "ation\":\"Paris\"}")
+    ))
+
+    let toolCalls = accumulator.toolCalls
+    #expect(toolCalls.count == 1)
+    #expect(toolCalls[0].id == "call_1")
+    #expect(toolCalls[0].type == "function")
+    #expect(toolCalls[0].function.name == "get_weather")
+    #expect(toolCalls[0].function.arguments == "{\"location\":\"Paris\"}")
+}
+
+@Test func testToolCallAccumulatorParallel() {
+    var accumulator = ToolCallAccumulator()
+
+    // Two tool calls arriving interleaved
+    accumulator.append(ToolCallDelta(
+        index: 0,
+        id: "call_1",
+        type: "function",
+        function: ToolCallDelta.FunctionCallDelta(name: "get_weather", arguments: "{}")
+    ))
+    accumulator.append(ToolCallDelta(
+        index: 1,
+        id: "call_2",
+        type: "function",
+        function: ToolCallDelta.FunctionCallDelta(name: "get_time", arguments: "{}")
+    ))
+
+    let toolCalls = accumulator.toolCalls
+    #expect(toolCalls.count == 2)
+    #expect(toolCalls[0].function.name == "get_weather")
+    #expect(toolCalls[1].function.name == "get_time")
+}
+
+@Test func testToolCallAccumulatorReset() {
+    var accumulator = ToolCallAccumulator()
+
+    accumulator.append(ToolCallDelta(
+        index: 0,
+        id: "call_1",
+        type: "function",
+        function: ToolCallDelta.FunctionCallDelta(name: "test", arguments: "{}")
+    ))
+
+    #expect(accumulator.toolCalls.count == 1)
+
+    accumulator.reset()
+
+    #expect(accumulator.toolCalls.isEmpty)
+}
+
+// MARK: - JSONSchema.null Tests
+
+@Test func testJSONSchemaNullEncoding() throws {
+    let schema = JSONSchema.null
+    let data = try JSONEncoder().encode(schema)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    #expect(json?["type"] as? String == "null")
+}
+
+// MARK: - Agent Introspection Tests
+
+@Test func testAgentToolIntrospection() async throws {
+    let config = URLSessionConfiguration.ephemeral
+    let client = try LLMClient(
+        baseURL: "https://api.test.com/chat",
+        apiKey: "test-key",
+        sessionConfiguration: config
+    )
+
+    let tool1 = Tool(function: Tool.Function(
+        name: "tool_a",
+        description: "Tool A",
+        parameters: .object(properties: [:], required: [])
+    ))
+    let tool2 = Tool(function: Tool.Function(
+        name: "tool_b",
+        description: "Tool B",
+        parameters: .object(properties: [:], required: [])
+    ))
+
+    let agent = Agent(
+        client: client,
+        model: "gpt-4",
+        tools: [tool1, tool2],
+        toolHandlers: ["tool_a": { _ in "a" }, "tool_b": { _ in "b" }]
+    )
+
+    let names = await agent.registeredToolNames
+    #expect(names == ["tool_a", "tool_b"])
+    let count = await agent.toolCount
+    #expect(count == 2)
+}
+
+// MARK: - Agent Builder Duplicate Tool Detection
+
+@Test func testAgentBuilderDuplicateToolThrows() throws {
+    let config = URLSessionConfiguration.ephemeral
+    let client = try LLMClient(
+        baseURL: "https://api.test.com/chat",
+        apiKey: "test-key",
+        sessionConfiguration: config
+    )
+
+    let tool = Tool(function: Tool.Function(
+        name: "duplicate_tool",
+        description: "Test",
+        parameters: .object(properties: [:], required: [])
+    ))
+
+    #expect(throws: LLMError.self) {
+        _ = try Agent(client: client, model: "gpt-4") {
+            AgentTool(tool: tool) { _ in "result1" }
+            AgentTool(tool: tool) { _ in "result2" }
+        }
+    }
+}
+
+// MARK: - Agent Builder No Tools
+
+@Test func testAgentBuilderNoTools() throws {
+    let config = URLSessionConfiguration.ephemeral
+    let client = try LLMClient(
+        baseURL: "https://api.test.com/chat",
+        apiKey: "test-key",
+        sessionConfiguration: config
+    )
+
+    let agent = Agent(client: client, model: "gpt-4")
+    // Verify we can check tool count without errors
+    // (this is synchronous creation, no network calls)
+    _ = agent
+}
+
 // MARK: - ToolSession Integration Tests
 
 struct ToolSessionTests {
@@ -2027,6 +2297,142 @@ struct ToolSessionTests {
             #expect(Bool(false), "Wrong error: \(error)")
         }
     }
+
+    @Test func toolSessionHandlerThrows() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let toolCallResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "failing_tool", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return (response, toolCallResponse.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let tool = Tool(function: Tool.Function(
+            name: "failing_tool",
+            description: "Always fails",
+            parameters: .object(properties: [:], required: [])
+        ))
+
+        struct ToolError: Error, LocalizedError {
+            var errorDescription: String? { "Something went wrong" }
+        }
+
+        let session = ToolSession(
+            client: client,
+            tools: [tool],
+            handlers: ["failing_tool": { _ in throw ToolError() }]
+        )
+
+        do {
+            _ = try await session.run(
+                model: "gpt-4",
+                messages: [TextMessage(role: .user, content: "Test")]
+            )
+            #expect(Bool(false), "Should have thrown toolExecutionFailed")
+        } catch LLMError.toolExecutionFailed(let toolName, let message) {
+            #expect(toolName == "failing_tool")
+            #expect(message.contains("ToolError"))
+        } catch {
+            #expect(Bool(false), "Wrong error: \(error)")
+        }
+    }
+
+    @Test func toolSessionMaxIterationsOne() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let toolCallResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "loop_tool", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return (response, toolCallResponse.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let tool = Tool(function: Tool.Function(
+            name: "loop_tool",
+            description: "Always loops",
+            parameters: .object(properties: [:], required: [])
+        ))
+
+        let session = ToolSession(
+            client: client,
+            tools: [tool],
+            maxIterations: 1,
+            handlers: ["loop_tool": { _ in "result" }]
+        )
+
+        do {
+            _ = try await session.run(
+                model: "gpt-4",
+                messages: [TextMessage(role: .user, content: "Loop")]
+            )
+            #expect(Bool(false), "Should have thrown maxIterationsExceeded")
+        } catch LLMError.maxIterationsExceeded(let max) {
+            #expect(max == 1)
+        } catch {
+            #expect(Bool(false), "Wrong error: \(error)")
+        }
+    }
 }
 
 // MARK: - Agent Tests
@@ -2209,6 +2615,54 @@ struct AgentTests {
         #expect(historyAfter.isEmpty)
         let transcriptAfter = await agent.transcript
         #expect(transcriptAfter.isEmpty)
+    }
+
+    @Test func agentSendWithoutTools() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let textResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello! How can I help?"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return (response, textResponse.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let agent = Agent(client: client, model: "gpt-4", systemPrompt: "You are helpful.")
+
+        let response = try await agent.send("Hi there")
+        #expect(response == "Hello! How can I help?")
+
+        let history = await agent.history
+        // system + user + assistant = 3
+        #expect(history.count == 3)
+        #expect(history[0].role == .system)
+        #expect(history[1].role == .user)
+        #expect(history[2].role == .assistant)
+
+        let toolCount = await agent.toolCount
+        #expect(toolCount == 0)
     }
 } // end AgentTests
 

@@ -89,6 +89,8 @@ print(response.firstContent ?? "No response")  // Convenience property
 - ``ChatRequest``
 - ``ChatResponse``
 - ``TextMessage``
+- ``System(_:)``
+- ``UserMessage(_:)``
 
 ### Building Requests
 

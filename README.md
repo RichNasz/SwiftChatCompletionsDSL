@@ -4,13 +4,13 @@
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%2013.0+%20|%20iOS%2016.0+-blue.svg)](https://swift.org)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 
-> The SwiftUI of chat completions — declarative, type-safe, Apple-native tool calling for any OpenAI-compatible backend
+> The only zero-dependency SwiftUI-style DSL with built-in Apple-native tool calling for any OpenAI-compatible backend
 
 ## Overview
 
 SwiftChatCompletionsDSL is a modern Swift package that provides a **Domain Specific Language (DSL)** for interacting with Large Language Model (LLM) APIs. Instead of wrestling with complex JSON structures and manual request building, you can express your intent clearly and safely using Swift's powerful type system.
 
-With **Phase 2**, the DSL now includes full **tool calling**, an automatic **ToolSession** loop, and a persistent **Agent** actor — bringing Apple FoundationModels-style ergonomics to any OpenAI-compatible endpoint.
+The DSL includes full **tool calling**, an automatic **ToolSession** loop, and a persistent **Agent** actor — bringing Apple FoundationModels-style ergonomics to any OpenAI-compatible endpoint.
 
 ### Before & After
 
@@ -35,8 +35,8 @@ let request = try ChatRequest(model: "gpt-4") {
     try Temperature(0.7)
     try MaxTokens(150)
 } messages: {
-    TextMessage(role: .system, content: "You are helpful")
-    TextMessage(role: .user, content: "Explain Swift")
+    System("You are helpful")
+    UserMessage("Explain Swift")
 }
 ```
 
@@ -85,15 +85,15 @@ let request = try ChatRequest(model: "gpt-4") {
     try Temperature(0.7)
     try MaxTokens(150)
 } messages: {
-    TextMessage(role: .system, content: "You are a helpful assistant.")
-    TextMessage(role: .user, content: "Explain async/await in Swift.")
+    System("You are a helpful assistant.")
+    UserMessage("Explain async/await in Swift.")
 }
 
 let response = try await client.complete(request)
 print(response.firstContent ?? "No response")
 ```
 
-## Tool Calling
+## Tool Calling & Agents (Apple-style)
 
 ### Defining Tools with JSONSchema
 
@@ -111,16 +111,61 @@ let weatherTool = Tool(function: Tool.Function(
 ))
 ```
 
+### Macro-Powered Tools (with SwiftChatCompletionsMacros)
+
+For the most ergonomic tool definitions, use the companion [SwiftChatCompletionsMacros](https://github.com/RichNasz/SwiftChatCompletionsMacros) package:
+
+```swift
+import SwiftChatCompletionsDSLMacros
+import SwiftChatCompletionsMacros
+
+@ChatCompletionsToolArguments
+struct WeatherArgs {
+    @ChatCompletionsToolGuide("City and state, e.g. Alpharetta, GA")
+    var location: String
+
+    @ChatCompletionsToolGuide("Temperature unit", .anyOf(["celsius", "fahrenheit"]))
+    var unit: String?
+}
+
+/// Get the current weather for a location
+@ChatCompletionsTool
+struct GetWeather {
+    typealias Arguments = WeatherArgs
+
+    func call(arguments: WeatherArgs) async throws -> ToolOutput {
+        // Your weather API call here
+        return ToolOutput(content: "{\"temperature\": 72}")
+    }
+}
+
+// Bridge to AgentTool with one line:
+let agentTool = AgentTool(GetWeather())
+```
+
+**Manual vs Macro — side-by-side comparison:**
+
+| Aspect | Manual | Macro |
+|--------|--------|-------|
+| Parameter schema | Hand-write `JSONSchema` | Auto-generated from struct |
+| Argument parsing | Manual JSON decode | Auto-decoded to typed struct |
+| Tool name | Hand-write string | Auto-derived from type name |
+| Description | Hand-write string | Extracted from doc comment |
+| Lines of code | ~15 per tool | ~8 per tool |
+
+> **Note**: Future rename to `@ChatCompletionsTool` family planned for Apple FoundationModels compatibility.
+
 ### Inline Tools with Result Builder
 
 ```swift
-let request = try ChatRequest(model: "gpt-4", toolChoice: .auto) {
-    try Temperature(0.7)
+let request = try ChatRequest(model: "gpt-4o", toolChoice: .auto) {
+    try Temperature(0.2)
 } tools: {
     weatherTool
     calculatorTool
 } messages: {
-    TextMessage(role: .user, content: "What's the weather in Paris?")
+    System("You are a helpful assistant.")
+    UserMessage("What's the weather in Paris?")
 }
 ```
 
@@ -138,7 +183,7 @@ if response.requiresToolExecution, let toolCalls = response.firstToolCalls {
 }
 ```
 
-## ToolSession — Automatic Tool Execution
+### ToolSession — Automatic Tool Execution
 
 `ToolSession` handles the entire tool-calling loop automatically: send request, parse tool_calls, execute handlers in parallel, send results back, repeat until final response.
 
@@ -153,8 +198,8 @@ let session = ToolSession(
 )
 
 let result = try await session.run(
-    model: "gpt-4",
-    messages: [TextMessage(role: .user, content: "What's the weather in Paris?")]
+    model: "gpt-4o",
+    messages: [UserMessage("What's the weather in Paris?")]
 )
 
 print(result.response.firstContent ?? "")  // "The weather in Paris is 72°F and sunny."
@@ -162,14 +207,14 @@ print("Tool calls: \(result.log.count)")
 print("Iterations: \(result.iterations)")
 ```
 
-## Agent — Persistent Conversations with Tools
+### Agent — Persistent Conversations with Tools
 
 `Agent` is an actor that manages conversation history, automatically executes tools via `ToolSession`, and maintains a debugging transcript.
 
 ```swift
 let agent = try Agent(
     client: client,
-    model: "gpt-4",
+    model: "gpt-4o",
     systemPrompt: "You are a helpful assistant with weather data access."
 ) {
     try Temperature(0.7)
@@ -202,48 +247,6 @@ for entry in await agent.transcript {
 await agent.reset()
 ```
 
-## Macro-Powered Tools (with SwiftChatCompletionsMacros)
-
-For the most ergonomic tool definitions, use the companion [SwiftChatCompletionsMacros](https://github.com/RichNasz/SwiftChatCompletionsMacros) package:
-
-```swift
-import SwiftChatCompletionsDSLMacros
-import SwiftChatCompletionsMacros
-
-@ChatCompletionsToolArguments
-struct WeatherArgs {
-    @ChatCompletionsToolGuide("The city to get weather for")
-    var location: String
-
-    @ChatCompletionsToolGuide("Temperature unit", .anyOf(["celsius", "fahrenheit"]))
-    var unit: String?
-}
-
-/// Get the current weather for a location
-@ChatCompletionsTool
-struct GetWeather {
-    typealias Arguments = WeatherArgs
-
-    func call(arguments: WeatherArgs) async throws -> ToolOutput {
-        // Your weather API call here
-        return ToolOutput(content: "{\"temperature\": 72}")
-    }
-}
-
-// Bridge to AgentTool with one line:
-let agentTool = AgentTool(GetWeather())
-```
-
-**Manual vs Macro comparison:**
-
-| Aspect | Manual | Macro |
-|--------|--------|-------|
-| Parameter schema | Hand-write `JSONSchema` | Auto-generated from struct |
-| Argument parsing | Manual JSON decode | Auto-decoded to typed struct |
-| Tool name | Hand-write string | Auto-derived from type name |
-| Description | Hand-write string | Extracted from doc comment |
-| Lines of code | ~15 per tool | ~8 per tool |
-
 ## Streaming
 
 ```swift
@@ -251,7 +254,7 @@ let request = try ChatRequest(model: "gpt-4", stream: true) {
     try Temperature(0.8)
     try MaxTokens(200)
 } messages: {
-    TextMessage(role: .user, content: "Write a haiku about Swift.")
+    UserMessage("Write a haiku about Swift.")
 }
 
 for try await delta in client.stream(request) {
@@ -265,7 +268,7 @@ for try await delta in client.stream(request) {
 
 ```swift
 var conversation = ChatConversation {
-    TextMessage(role: .system, content: "You are a helpful tutor.")
+    System("You are a helpful tutor.")
 }
 
 conversation.addUser(content: "What is recursion?")
@@ -330,7 +333,7 @@ Products:
 Targets:
   SwiftChatCompletionsDSL          # Core (Foundation only)
   SwiftChatCompletionsDSLMacros    # Bridge target
-  SwiftChatCompletionsDSLTests     # 93 tests
+  SwiftChatCompletionsDSLTests     # 98 tests
 ```
 
 ## Requirements

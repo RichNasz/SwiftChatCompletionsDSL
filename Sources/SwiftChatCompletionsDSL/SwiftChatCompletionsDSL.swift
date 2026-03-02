@@ -266,6 +266,75 @@ public struct TextMessage: ChatMessage, Sendable {
 	}
 }
 
+// MARK: - Convenience Message Functions
+
+/// Creates a system message with the given content.
+///
+/// Shorthand for `TextMessage(role: .system, content: content)`.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") {
+///     try Temperature(0.7)
+/// } messages: {
+///     System("You are a helpful assistant.")
+///     User("Hello!")
+/// }
+/// ```
+///
+/// - Parameter content: The system instruction text
+/// - Returns: A ``TextMessage`` with role `.system`
+@inlinable
+public func System(_ content: String) -> TextMessage {
+	TextMessage(role: .system, content: content)
+}
+
+/// Creates a user message with the given content.
+///
+/// Shorthand for `TextMessage(role: .user, content: content)`.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") {
+///     try Temperature(0.7)
+/// } messages: {
+///     System("You are a helpful assistant.")
+///     UserMessage("Explain async/await in Swift.")
+/// }
+/// ```
+///
+/// - Note: Named `UserMessage` to avoid conflict with the ``User`` configuration parameter.
+///   In `@ChatBuilder` blocks use `UserMessage("...")`, in `@ChatConfigBuilder` blocks use `try User("user-id")`.
+///
+/// - Parameter content: The user message text
+/// - Returns: A ``TextMessage`` with role `.user`
+@inlinable
+public func UserMessage(_ content: String) -> TextMessage {
+	TextMessage(role: .user, content: content)
+}
+
+/// Creates an assistant message with the given content.
+///
+/// Shorthand for `TextMessage(role: .assistant, content: content)`.
+/// Useful when building conversation history or few-shot examples.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") messages: {
+///     System("You are a helpful assistant.")
+///     UserMessage("What is 2+2?")
+///     Assistant("4")
+///     UserMessage("And 3+3?")
+/// }
+/// ```
+///
+/// - Parameter content: The assistant message text
+/// - Returns: A ``TextMessage`` with role `.assistant`
+@inlinable
+public func Assistant(_ content: String) -> TextMessage {
+	TextMessage(role: .assistant, content: content)
+}
+
 // MARK: - Configuration Parameter Structs
 
 /// Controls the randomness and creativity of the AI's responses.
@@ -905,6 +974,8 @@ public indirect enum JSONSchema: Sendable, Equatable, Encodable {
 	case number(description: String? = nil, minimum: Double? = nil, maximum: Double? = nil)
 	/// JSON Schema boolean type with optional description.
 	case boolean(description: String? = nil)
+	/// JSON Schema null type.
+	case null
 
 	public func encode(to encoder: Encoder) throws {
 		var container = encoder.container(keyedBy: SchemaKeys.self)
@@ -942,6 +1013,9 @@ public indirect enum JSONSchema: Sendable, Equatable, Encodable {
 		case .boolean(let description):
 			try container.encode("boolean", forKey: .type)
 			try container.encodeIfPresent(description, forKey: .description)
+
+		case .null:
+			try container.encode("null", forKey: .type)
 		}
 	}
 
@@ -963,12 +1037,47 @@ public struct ToolCall: Codable, Sendable, Equatable {
 	/// The function call details
 	public let function: FunctionCall
 
+	/// Creates a new ToolCall.
+	/// - Parameters:
+	///   - id: Unique identifier for this tool call
+	///   - type: The type of tool call (defaults to "function")
+	///   - function: The function call details
+	public init(id: String, type: String = "function", function: FunctionCall) {
+		self.id = id
+		self.type = type
+		self.function = function
+	}
+
 	/// Represents the function name and arguments in a tool call.
 	public struct FunctionCall: Codable, Sendable, Equatable {
 		/// The name of the function to call
 		public let name: String
 		/// The arguments as a raw JSON string
 		public let arguments: String
+
+		/// Creates a new FunctionCall.
+		/// - Parameters:
+		///   - name: The name of the function to call
+		///   - arguments: The arguments as a raw JSON string
+		public init(name: String, arguments: String) {
+			self.name = name
+			self.arguments = arguments
+		}
+	}
+
+	/// Decodes the raw JSON arguments into a typed Swift value.
+	/// - Parameter type: The Decodable type to decode into (can be inferred)
+	/// - Returns: The decoded value
+	/// - Throws: `LLMError.decodingFailed` if the arguments cannot be decoded
+	public func decodeArguments<T: Decodable>(_ type: T.Type = T.self) throws -> T {
+		guard let data = function.arguments.data(using: .utf8) else {
+			throw LLMError.decodingFailed("Tool call arguments are not valid UTF-8")
+		}
+		do {
+			return try JSONDecoder().decode(T.self, from: data)
+		} catch {
+			throw LLMError.decodingFailed("Failed to decode tool call arguments: \(error.localizedDescription)")
+		}
 	}
 }
 
@@ -983,12 +1092,110 @@ public struct ToolCallDelta: Codable, Sendable, Equatable {
 	/// Incremental function call data
 	public let function: FunctionCallDelta?
 
+	/// Creates a new ToolCallDelta.
+	/// - Parameters:
+	///   - index: Index of this tool call in the array
+	///   - id: Tool call ID (present in first chunk)
+	///   - type: Tool call type (present in first chunk)
+	///   - function: Incremental function call data
+	public init(index: Int, id: String? = nil, type: String? = nil, function: FunctionCallDelta? = nil) {
+		self.index = index
+		self.id = id
+		self.type = type
+		self.function = function
+	}
+
 	/// Incremental function call data from a streaming delta.
 	public struct FunctionCallDelta: Codable, Sendable, Equatable {
 		/// Function name (present in first chunk)
 		public let name: String?
 		/// Incremental arguments string
 		public let arguments: String?
+
+		/// Creates a new FunctionCallDelta.
+		/// - Parameters:
+		///   - name: Function name (present in first chunk)
+		///   - arguments: Incremental arguments string
+		public init(name: String? = nil, arguments: String? = nil) {
+			self.name = name
+			self.arguments = arguments
+		}
+	}
+}
+
+/// Accumulates streaming `ToolCallDelta` chunks into complete `ToolCall` objects.
+///
+/// During streaming, tool calls arrive as incremental deltas with partial id, name,
+/// and argument fragments. `ToolCallAccumulator` handles the assembly logic so callers
+/// don't need to manually track and concatenate fragments.
+///
+/// ## Example Usage
+/// ```swift
+/// var accumulator = ToolCallAccumulator()
+/// for await delta in client.stream(request) {
+///     if let toolCallDeltas = delta.firstToolCallDeltas {
+///         for tcd in toolCallDeltas {
+///             accumulator.append(tcd)
+///         }
+///     }
+/// }
+/// let completedToolCalls = accumulator.toolCalls
+/// ```
+public struct ToolCallAccumulator: Sendable {
+	private var ids: [Int: String] = [:]
+	private var types: [Int: String] = [:]
+	private var names: [Int: String] = [:]
+	private var arguments: [Int: String] = [:]
+	private var maxIndex: Int = -1
+
+	/// Creates a new empty accumulator.
+	public init() {}
+
+	/// Appends a streaming tool call delta, merging it into the accumulated state.
+	/// - Parameter delta: The incremental tool call delta to accumulate
+	public mutating func append(_ delta: ToolCallDelta) {
+		let idx = delta.index
+		if idx > maxIndex { maxIndex = idx }
+
+		if let id = delta.id {
+			ids[idx] = id
+		}
+		if let type = delta.type {
+			types[idx] = type
+		}
+		if let fn = delta.function {
+			if let name = fn.name {
+				names[idx] = name
+			}
+			if let args = fn.arguments {
+				arguments[idx, default: ""].append(args)
+			}
+		}
+	}
+
+	/// The accumulated complete tool calls, ordered by index.
+	public var toolCalls: [ToolCall] {
+		guard maxIndex >= 0 else { return [] }
+		return (0...maxIndex).compactMap { idx in
+			guard let id = ids[idx], let name = names[idx] else { return nil }
+			return ToolCall(
+				id: id,
+				type: types[idx] ?? "function",
+				function: ToolCall.FunctionCall(
+					name: name,
+					arguments: arguments[idx] ?? ""
+				)
+			)
+		}
+	}
+
+	/// Resets the accumulator, clearing all accumulated state.
+	public mutating func reset() {
+		ids.removeAll()
+		types.removeAll()
+		names.removeAll()
+		arguments.removeAll()
+		maxIndex = -1
 	}
 }
 
@@ -2504,7 +2711,8 @@ extension ChatResponse {
 
 	/// Whether this response requires tool execution (model returned tool calls).
 	public var requiresToolExecution: Bool {
-		firstFinishReason == "tool_calls" || (firstToolCalls?.isEmpty == false)
+		guard let toolCalls = firstToolCalls else { return false }
+		return !toolCalls.isEmpty
 	}
 }
 
@@ -3087,452 +3295,3 @@ public actor LLMClient {
 	}
 }
 
-// MARK: - Tool Session
-
-/// Log entry for a single tool call execution within a ToolSession.
-public struct ToolCallLogEntry: Sendable {
-	/// The name of the tool that was called
-	public let name: String
-	/// The raw JSON arguments passed to the tool
-	public let arguments: String
-	/// The result returned by the tool handler
-	public let result: String
-	/// How long the tool execution took
-	public let duration: Duration
-}
-
-/// Result of a ToolSession run, containing the final response and execution details.
-public struct ToolSessionResult: Sendable {
-	/// The final chat response (after all tool-calling iterations)
-	public let response: ChatResponse
-	/// All messages exchanged during the session (including tool calls and results)
-	public let messages: [any ChatMessage]
-	/// Number of tool-calling iterations performed
-	public let iterations: Int
-	/// Log of all tool call executions
-	public let log: [ToolCallLogEntry]
-}
-
-/// Orchestrates the tool-calling loop: send → parse tool_calls → execute → results → repeat.
-///
-/// `ToolSession` manages the iterative process of sending requests to an LLM,
-/// receiving tool call requests, executing the corresponding handlers, and
-/// sending results back until the model produces a final text response.
-///
-/// ## Example Usage
-/// ```swift
-/// let session = ToolSession(
-///     client: client,
-///     tools: [weatherTool],
-///     handlers: ["get_weather": { args in
-///         return "{\"temperature\": 72, \"condition\": \"sunny\"}"
-///     }]
-/// )
-///
-/// let result = try await session.run(
-///     model: "gpt-4",
-///     messages: [TextMessage(role: .user, content: "What's the weather in Paris?")]
-/// )
-/// print(result.response.firstContent ?? "")
-/// ```
-public struct ToolSession: Sendable {
-	/// Closure type for tool handlers: takes raw JSON arguments, returns result string.
-	public typealias ToolHandler = @Sendable (String) async throws -> String
-
-	private let client: LLMClient
-	private let tools: [Tool]
-	private let toolChoice: ToolChoice?
-	private let handlers: [String: ToolHandler]
-	private let maxIterations: Int
-
-	/// Creates a new ToolSession.
-	/// - Parameters:
-	///   - client: The LLM client to use for API calls
-	///   - tools: Tool definitions to provide to the model
-	///   - toolChoice: Optional tool choice strategy
-	///   - maxIterations: Maximum number of tool-calling iterations (default: 10)
-	///   - handlers: Dictionary mapping tool names to their handler closures
-	public init(
-		client: LLMClient,
-		tools: [Tool],
-		toolChoice: ToolChoice? = nil,
-		maxIterations: Int = 10,
-		handlers: [String: ToolHandler]
-	) {
-		self.client = client
-		self.tools = tools
-		self.toolChoice = toolChoice
-		self.maxIterations = maxIterations
-		self.handlers = handlers
-	}
-
-	/// Runs the tool-calling loop until the model produces a final response.
-	/// - Parameters:
-	///   - model: The model identifier
-	///   - messages: Initial messages for the conversation
-	///   - config: Optional configuration parameters
-	/// - Returns: The final result including response, messages, and execution log
-	/// - Throws: `LLMError.maxIterationsExceeded` if the loop doesn't converge,
-	///           `LLMError.unknownTool` if model calls an unregistered tool,
-	///           or any error from the LLM client
-	public func run(
-		model: String,
-		messages: [any ChatMessage],
-		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] }
-	) async throws -> ToolSessionResult {
-		try await run(model: model, messages: messages, configParams: config())
-	}
-
-	/// Runs the tool-calling loop with pre-computed configuration parameters.
-	public func run(
-		model: String,
-		messages: [any ChatMessage],
-		configParams: [ChatConfigParameter]
-	) async throws -> ToolSessionResult {
-		var currentMessages = messages
-		var allLog: [ToolCallLogEntry] = []
-		var iterations = 0
-
-		while iterations < maxIterations {
-			// Build request with tools
-			var request = try ChatRequest(model: model, messages: currentMessages)
-			request.tools = tools
-			request.toolChoice = toolChoice
-			for param in configParams {
-				param.apply(to: &request)
-			}
-
-			let response = try await client.complete(request)
-
-			guard response.requiresToolExecution,
-				  let toolCalls = response.firstToolCalls, !toolCalls.isEmpty else {
-				// No tool calls — final response
-				return ToolSessionResult(
-					response: response,
-					messages: currentMessages,
-					iterations: iterations,
-					log: allLog
-				)
-			}
-
-			// Record assistant's tool call message
-			let assistantContent = response.firstContent
-			currentMessages.append(
-				AssistantToolCallMessage(
-					content: assistantContent?.isEmpty == true ? nil : assistantContent,
-					toolCalls: toolCalls
-				)
-			)
-
-			// Execute all tool handlers in parallel
-			let results = try await withThrowingTaskGroup(
-				of: (Int, String, ToolCallLogEntry).self
-			) { group in
-				for (index, toolCall) in toolCalls.enumerated() {
-					let handlerName = toolCall.function.name
-					guard let handler = handlers[handlerName] else {
-						throw LLMError.unknownTool(handlerName)
-					}
-
-					group.addTask {
-						let clock = ContinuousClock()
-						let start = clock.now
-						do {
-							let result = try await handler(toolCall.function.arguments)
-							let duration = clock.now - start
-							let logEntry = ToolCallLogEntry(
-								name: handlerName,
-								arguments: toolCall.function.arguments,
-								result: result,
-								duration: duration
-							)
-							return (index, result, logEntry)
-						} catch {
-							throw LLMError.toolExecutionFailed(
-								toolName: handlerName,
-								message: "\(error)"
-							)
-						}
-					}
-				}
-
-				var collected: [(Int, String, ToolCallLogEntry)] = []
-				for try await result in group {
-					collected.append(result)
-				}
-				return collected.sorted { $0.0 < $1.0 }
-			}
-
-			// Append tool result messages in order
-			for (index, result, logEntry) in results {
-				allLog.append(logEntry)
-				currentMessages.append(
-					ToolResultMessage(
-						toolCallId: toolCalls[index].id,
-						content: result
-					)
-				)
-			}
-
-			iterations += 1
-		}
-
-		throw LLMError.maxIterationsExceeded(maxIterations)
-	}
-}
-
-// MARK: - Agent
-
-/// Structured log entry for Agent debugging and observability.
-public enum TranscriptEntry: Sendable {
-	/// A user message was sent
-	case userMessage(String)
-	/// The assistant produced a text response
-	case assistantMessage(String)
-	/// The assistant requested a tool call
-	case toolCall(name: String, arguments: String)
-	/// A tool returned a result
-	case toolResult(name: String, result: String, duration: Duration)
-	/// An error occurred
-	case error(String)
-}
-
-/// Pairs a Tool definition with its handler closure for use with Agent.
-public struct AgentTool: Sendable {
-	/// The tool definition
-	public let tool: Tool
-	/// The handler closure that executes the tool
-	public let handler: ToolSession.ToolHandler
-
-	/// Creates an AgentTool.
-	/// - Parameters:
-	///   - tool: The tool definition
-	///   - handler: The handler closure
-	public init(tool: Tool, handler: @escaping ToolSession.ToolHandler) {
-		self.tool = tool
-		self.handler = handler
-	}
-}
-
-/// Result builder for declaratively registering tools with an Agent.
-///
-/// ## Example Usage
-/// ```swift
-/// let agent = try Agent(client: client, model: "gpt-4") {
-///     AgentTool(tool: weatherTool) { args in
-///         return "{\"temperature\": 72}"
-///     }
-///     AgentTool(tool: calculatorTool) { args in
-///         return "42"
-///     }
-/// }
-/// ```
-@resultBuilder
-public struct AgentToolBuilder {
-	public static func buildBlock(_ components: AgentTool...) -> [AgentTool] {
-		Array(components)
-	}
-
-	public static func buildEither(first: [AgentTool]) -> [AgentTool] {
-		first
-	}
-
-	public static func buildEither(second: [AgentTool]) -> [AgentTool] {
-		second
-	}
-
-	public static func buildOptional(_ component: [AgentTool]?) -> [AgentTool] {
-		component ?? []
-	}
-
-	public static func buildArray(_ components: [[AgentTool]]) -> [AgentTool] {
-		components.flatMap { $0 }
-	}
-}
-
-/// High-level persistent agent with conversation history and tool execution.
-///
-/// `Agent` manages a multi-turn conversation with an LLM, automatically handling
-/// tool calls via `ToolSession`. It maintains conversation history and a debugging
-/// transcript for observability.
-///
-/// ## Example Usage
-/// ```swift
-/// let agent = try Agent(client: client, model: "gpt-4", systemPrompt: "You are helpful.") {
-///     AgentTool(tool: weatherTool) { args in
-///         return "{\"temperature\": 72, \"condition\": \"sunny\"}"
-///     }
-/// }
-///
-/// let response = try await agent.send("What's the weather in Paris?")
-/// print(response)
-/// ```
-public actor Agent {
-	private let client: LLMClient
-	private let model: String
-	private var conversation: ChatConversation
-	private let tools: [Tool]
-	private let toolChoice: ToolChoice?
-	private let toolHandlers: [String: ToolSession.ToolHandler]
-	private let configParams: [ChatConfigParameter]
-	private let maxToolIterations: Int
-	private var _transcript: [TranscriptEntry] = []
-
-	/// The full conversation history.
-	public var history: [any ChatMessage] {
-		conversation.history
-	}
-
-	/// The debugging transcript of all agent activity.
-	public var transcript: [TranscriptEntry] {
-		_transcript
-	}
-
-	/// Creates a new Agent with explicit tool definitions and handlers.
-	/// - Parameters:
-	///   - client: The LLM client to use
-	///   - model: The model identifier
-	///   - systemPrompt: Optional system prompt
-	///   - tools: Tool definitions
-	///   - toolChoice: Optional tool choice strategy
-	///   - toolHandlers: Dictionary mapping tool names to handlers
-	///   - config: Configuration parameters
-	///   - maxToolIterations: Maximum tool-calling loop iterations (default: 10)
-	public init(
-		client: LLMClient,
-		model: String,
-		systemPrompt: String? = nil,
-		tools: [Tool] = [],
-		toolChoice: ToolChoice? = nil,
-		toolHandlers: [String: ToolSession.ToolHandler] = [:],
-		config: [ChatConfigParameter] = [],
-		maxToolIterations: Int = 10
-	) {
-		self.client = client
-		self.model = model
-		self.tools = tools
-		self.toolChoice = toolChoice
-		self.toolHandlers = toolHandlers
-		self.configParams = config
-		self.maxToolIterations = maxToolIterations
-
-		if let systemPrompt {
-			self.conversation = ChatConversation {
-				TextMessage(role: .system, content: systemPrompt)
-			}
-		} else {
-			self.conversation = ChatConversation()
-		}
-	}
-
-	/// Creates a new Agent using the builder pattern for tools.
-	/// - Parameters:
-	///   - client: The LLM client to use
-	///   - model: The model identifier
-	///   - systemPrompt: Optional system prompt
-	///   - maxToolIterations: Maximum tool-calling loop iterations (default: 10)
-	///   - config: Configuration parameters using ChatConfigBuilder
-	///   - tools: Tools using AgentToolBuilder
-	public init(
-		client: LLMClient,
-		model: String,
-		systemPrompt: String? = nil,
-		maxToolIterations: Int = 10,
-		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
-		@AgentToolBuilder tools: () -> [AgentTool]
-	) throws {
-		let agentTools = tools()
-		let toolDefs = agentTools.map(\.tool)
-		var handlers: [String: ToolSession.ToolHandler] = [:]
-		for agentTool in agentTools {
-			handlers[agentTool.tool.function.name] = agentTool.handler
-		}
-
-		self.client = client
-		self.model = model
-		self.tools = toolDefs
-		self.toolChoice = nil
-		self.toolHandlers = handlers
-		self.configParams = try config()
-		self.maxToolIterations = maxToolIterations
-
-		if let systemPrompt {
-			self.conversation = ChatConversation {
-				TextMessage(role: .system, content: systemPrompt)
-			}
-		} else {
-			self.conversation = ChatConversation()
-		}
-	}
-
-	/// Sends a user message and returns the assistant's response.
-	///
-	/// If the model requests tool calls, they are automatically executed
-	/// and the results are sent back until a final text response is produced.
-	///
-	/// - Parameter message: The user's message text
-	/// - Returns: The assistant's text response
-	/// - Throws: `LLMError` for API or tool execution failures
-	public func send(_ message: String) async throws -> String {
-		conversation.addUser(content: message)
-		_transcript.append(.userMessage(message))
-
-		if tools.isEmpty {
-			// No tools — simple completion
-			var request = try ChatRequest(model: model, messages: conversation.history)
-			for param in configParams {
-				param.apply(to: &request)
-			}
-
-			let response = try await client.complete(request)
-			let content = response.firstContent ?? ""
-			conversation.addAssistant(content: content)
-			_transcript.append(.assistantMessage(content))
-			return content
-		}
-
-		// Use ToolSession for tool-calling loop
-		let session = ToolSession(
-			client: client,
-			tools: tools,
-			toolChoice: toolChoice,
-			maxIterations: maxToolIterations,
-			handlers: toolHandlers
-		)
-
-		// Copy to local to cross isolation boundary
-		let configCopy = configParams
-		let messagesCopy = conversation.history
-		let result = try await session.run(
-			model: model,
-			messages: messagesCopy,
-			configParams: configCopy
-		)
-
-		// Record tool activity in transcript
-		for entry in result.log {
-			_transcript.append(.toolCall(name: entry.name, arguments: entry.arguments))
-			_transcript.append(.toolResult(name: entry.name, result: entry.result, duration: entry.duration))
-		}
-
-		// Update conversation with all messages from the session
-		// Replace history from the point where we started
-		let originalCount = conversation.history.count
-		let newMessages = result.messages.dropFirst(originalCount)
-		for msg in newMessages {
-			conversation.add(message: msg)
-		}
-
-		// Add final assistant response
-		let content = result.response.firstContent ?? ""
-		conversation.addAssistant(content: content)
-		_transcript.append(.assistantMessage(content))
-		return content
-	}
-
-	/// Resets the agent's conversation history and transcript.
-	public func reset() {
-		conversation.clear()
-		_transcript.removeAll()
-	}
-}

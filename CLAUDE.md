@@ -58,8 +58,10 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - Utility properties: `lastMessageRole`, `messageCount`
 
 6. **Tool Calling Types**:
-   - `JSONSchema`: Type-safe JSON Schema representation (indirect enum) for tool parameters
-   - `ToolCall` / `ToolCallDelta`: Parsed tool calls from non-streaming / streaming responses
+   - `JSONSchema`: Type-safe JSON Schema representation (indirect enum, cases: `object`, `array`, `string`, `integer`, `number`, `boolean`, `null`)
+   - `ToolCall` / `ToolCallDelta`: Parsed tool calls from non-streaming / streaming responses (with public inits)
+   - `ToolCall.decodeArguments()`: Generic helper to decode raw JSON arguments into typed Swift values
+   - `ToolCallAccumulator`: Accumulates streaming `ToolCallDelta` chunks into complete `ToolCall` objects
    - `ToolChoice`: Controls model tool selection (`auto`, `none`, `required`, `function(name)`)
    - `AssistantToolCallMessage`: Message type for assistant tool call requests
    - `ToolResultMessage`: Message type for tool execution results
@@ -69,12 +71,15 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - Uses `withThrowingTaskGroup` for parallel tool execution
    - Returns `ToolSessionResult` with response, messages, iterations, and execution log
    - Configurable `maxIterations` to prevent infinite loops
+   - Duplicate tool name detection via `precondition`
+   - Error context includes error type name in `toolExecutionFailed`
 
 8. **Agent (Actor)**: High-level persistent agent
    - Manages `ChatConversation` for history across multiple `send()` calls
    - Uses `ToolSession` internally for automatic tool-calling loops
    - Maintains `[TranscriptEntry]` for debugging/observability
-   - Builder init with `@AgentToolBuilder` for declarative tool registration
+   - Builder init with `@AgentToolBuilder` for declarative tool registration (throws on duplicate tool names)
+   - Introspection: `registeredToolNames`, `toolCount` computed properties
 
 9. **Response Convenience Extensions**:
    - `ChatResponse`: `firstContent`, `firstFinishReason`, `totalTokens`, `firstToolCalls`, `requiresToolExecution`
@@ -135,6 +140,10 @@ Custom `LLMError` enum covers:
 - `ToolSession.ToolHandler` signature: `@Sendable (String) async throws -> String`
 - Parallel tool execution via `withThrowingTaskGroup` when API returns multiple tool_calls
 - `Agent` uses `ToolSession` internally for automatic tool-calling loops
+- `ToolCall.decodeArguments()` provides typed argument decoding, wrapping errors as `LLMError.decodingFailed`
+- `ToolCallAccumulator` assembles streaming `ToolCallDelta` chunks into complete `ToolCall` objects
+- Duplicate tool name detection: `precondition` in `ToolSession`/`Agent` explicit init, `throws` in `Agent` builder init
+- `requiresToolExecution` checks only `firstToolCalls` (not `firstFinishReason`) for provider compatibility
 
 ### Macros Bridge
 - `JSONSchema.init(from: JSONSchemaValue)` converts macros `JSONSchemaValue` → DSL `JSONSchema`
@@ -155,18 +164,25 @@ The test suite uses Swift Testing framework and covers:
 - Async streaming operations (with mocked `URLSession`)
 - JSON serialization/deserialization
 - Edge cases (empty messages, rate limits)
-- JSONSchema encoding for all 6 cases
-- ToolCall/ToolCallDelta decoding
+- JSONSchema encoding for all 7 cases (including `null`)
+- ToolCall/ToolCallDelta decoding and public inits
+- ToolCall.decodeArguments() success and error paths
+- ToolCallAccumulator (basic, parallel, reset)
 - ToolChoice encoding for all 4 variants
 - AssistantToolCallMessage/ToolResultMessage encoding
 - ChatResponse/ChatDelta with tool calls
-- ToolSession integration tests (single, parallel, max iterations, unknown tool)
-- Agent multi-turn conversation, transcript logging, reset
+- ToolSession integration tests (single, parallel, max iterations, max iterations boundary, unknown tool, handler throws)
+- Agent multi-turn conversation, transcript logging, reset, send without tools
+- Agent builder duplicate tool detection, no-tools creation
+- Agent tool introspection (registeredToolNames, toolCount)
+- Assistant() and other convenience message functions
 
 ## File Structure
 ```
 Sources/SwiftChatCompletionsDSL/
-├── SwiftChatCompletionsDSL.swift           # Main implementation (all core types)
+├── SwiftChatCompletionsDSL.swift           # Core types, messages, ChatRequest, LLMClient
+├── ToolSession.swift                        # ToolSession, ToolSessionResult, ToolCallLogEntry
+├── Agent.swift                              # Agent actor, AgentTool, AgentToolBuilder, TranscriptEntry
 ├── SwiftChatCompletionsDSL.docc/           # DocC documentation catalog
 │   ├── SwiftChatCompletionsDSL.md          # Main documentation
 │   ├── Architecture.md                      # Technical architecture
@@ -175,13 +191,14 @@ Sources/SwiftChatCompletionsDSL/
 Sources/SwiftChatCompletionsDSLMacros/
 ├── MacrosBridge.swift                       # Bridge to SwiftChatCompletionsMacros
 Tests/SwiftChatCompletionsDSLTests/
-├── SwiftChatCompletionsDSLTests.swift      # All test cases
+├── SwiftChatCompletionsDSLTests.swift      # All test cases (112 tests)
 Spec/
 ├── SwiftChatCompletionsDSL.md              # Core specification
-├── ToolCalling.md                           # Tool calling specification
+├── ToolCalling.md                           # Tool calling type specification
+├── ToolSupportSpec.md                       # Tool support public API specification
 ├── DocumentationSpec.md                     # Documentation requirements
 Examples/
 ├── BasicUsage.swift                         # Usage examples
 ```
 
-The project follows Swift Package Manager conventions with all core implementation in a single source file for simplicity, with a separate macros bridge target for SwiftChatCompletionsMacros integration.
+The project follows Swift Package Manager conventions with core types in the main source file and tool orchestration (ToolSession, Agent) in separate files, plus a macros bridge target for SwiftChatCompletionsMacros integration.

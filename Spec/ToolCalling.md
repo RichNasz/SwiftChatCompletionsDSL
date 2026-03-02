@@ -9,7 +9,7 @@ This specification defines the tool calling and agent orchestration types for Sw
 ### JSONSchema (indirect enum)
 Type-safe JSON Schema representation replacing `[String: String]` for tool parameters.
 
-- **Cases**: `object`, `array`, `string`, `integer`, `number`, `boolean`
+- **Cases**: `object`, `array`, `string`, `integer`, `number`, `boolean`, `null`
 - **Conformance**: `Sendable`, `Equatable`, `Encodable`
 - **Encoding**: Produces standard JSON Schema format (`{"type":"object","properties":{...},"required":[...]}`)
 - **Object type**: Includes `additionalProperties: false` per OpenAI requirements
@@ -19,14 +19,29 @@ Parsed tool call from a non-streaming API response.
 
 - **Fields**: `id: String`, `type: String`, `function: FunctionCall`
 - **FunctionCall**: `name: String`, `arguments: String` (raw JSON)
+- **Public inits**: Both `ToolCall` and `FunctionCall` have explicit public initializers
 - **Conformance**: `Codable`, `Sendable`
+- **decodeArguments()**: Generic helper to decode raw JSON arguments into typed Swift values:
+  ```swift
+  public func decodeArguments<T: Decodable>(_ type: T.Type = T.self) throws -> T
+  ```
+  Handles UTF-8 conversion safely and wraps errors as `LLMError.decodingFailed`
 
 ### ToolCallDelta (struct)
 Incremental tool call from a streaming delta.
 
 - **Fields**: `index: Int`, `id: String?`, `type: String?`, `function: FunctionCallDelta?`
 - **FunctionCallDelta**: `name: String?`, `arguments: String?`
+- **Public inits**: Both `ToolCallDelta` and `FunctionCallDelta` have explicit public initializers
 - **Conformance**: `Codable`, `Sendable`
+
+### ToolCallAccumulator (struct)
+Accumulates streaming `ToolCallDelta` chunks into complete `ToolCall` objects.
+
+- **Methods**: `append(_:)` to add deltas, `reset()` to clear state
+- **Properties**: `toolCalls: [ToolCall]` returns accumulated complete tool calls ordered by index
+- **Conformance**: `Sendable`
+- **Purpose**: Eliminates boilerplate of manually tracking and concatenating partial id, name, and argument fragments during streaming
 
 ### ToolChoice (enum)
 Controls model tool selection behavior.
@@ -57,8 +72,10 @@ Orchestrates the tool-calling loop: send → parse tool_calls → execute handle
 
 - **ToolHandler**: `@Sendable (String) async throws -> String`
 - **Init parameters**: `client`, `tools`, `toolChoice`, `maxIterations`, `handlers`
+- **Duplicate detection**: `precondition` fails if two tools share the same name
 - **run()**: Accepts model, messages, config; returns `ToolSessionResult`
 - **Loop logic**: Parallel tool execution via `withThrowingTaskGroup`
+- **Error context**: `toolExecutionFailed` message includes error type name: `"[\(type(of: error))] \(error.localizedDescription)"`
 
 ### ToolSessionResult (struct)
 Result of a ToolSession run.
@@ -74,9 +91,11 @@ Log entry for a single tool call execution.
 High-level persistent agent with conversation history, parallel tool execution, and transcript.
 
 - **Init**: client, model, systemPrompt, tools, toolChoice, toolHandlers, config, maxToolIterations
+  - Explicit init: `precondition` fails on duplicate tool names
 - **Builder init**: Uses `@AgentToolBuilder` for declarative tool registration
+  - Throws `LLMError.invalidValue("Duplicate tool name: '\(name)'")`  on duplicate tool names
 - **Methods**: `send(_:)`, `reset()`
-- **Properties**: `history`, `transcript`
+- **Properties**: `history`, `transcript`, `registeredToolNames: [String]`, `toolCount: Int`
 - Uses `ToolSession` internally
 
 ### TranscriptEntry (enum)
@@ -102,7 +121,7 @@ Declarative syntax for registering tools with Agent.
 | `ChatDelta.Delta` | Add `toolCalls: [ToolCallDelta]?` |
 | `LLMError` | Add `maxIterationsExceeded(Int)`, `unknownTool(String)`, `toolExecutionFailed(toolName:message:)` |
 | `ChatConversation` | Add `addAssistantToolCalls()`, `addToolResult()` |
-| `ChatResponse` | Add `firstToolCalls`, `requiresToolExecution` |
+| `ChatResponse` | Add `firstToolCalls`, `requiresToolExecution` (checks `firstToolCalls` only, not `firstFinishReason`) |
 | `ChatDelta` | Add `firstToolCallDeltas` |
 
 ## Backward Compatibility

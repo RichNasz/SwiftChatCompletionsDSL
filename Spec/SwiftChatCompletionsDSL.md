@@ -7,7 +7,7 @@ To support conversation history, the DSL is extended with:
 - An additional initializer for `ChatRequest` that accepts a pre-built array of messages (`[any ChatMessage]`), enabling users to pass existing conversation history directly without relying on the result builder.
 - A new `ChatConversation` struct for managing persistent conversation history, with methods to append messages and generate `ChatRequest`s. This facilitates stateful interactions, where history can be built incrementally across multiple requests.
 
-For tool calling and agent capabilities, see [ToolCalling.md](ToolCalling.md).
+For tool calling and agent capabilities, see [ToolCalling.md](ToolCalling.md) and [ToolSupportSpec.md](ToolSupportSpec.md).
 
 ## Goals
 - **Explicit Configuration**: Require `baseURL` (full endpoint URL) in client initialization and `model` in every request, without defaults or path appending.
@@ -477,7 +477,7 @@ For tool calling and agent capabilities, see [ToolCalling.md](ToolCalling.md).
 - **Platform Requirements**: Set minimum platforms to `macOS(.v12), iOS(.v15)` in Package.swift for `AsyncStream` and `URLSession.data(for:)` availability.
 - **Streaming**: Parse SSE, handling `data: [DONE]` and errors. Each chunk is valid JSON decoding to `ChatDelta`. Use `@Sendable` closures and capture local values to avoid actor isolation issues. The `stream()` method returns `AsyncThrowingStream<ChatDelta, Error>` to properly propagate errors.
 - **Session Caching**: `LLMClient` uses an internal `SessionCache` actor to cache `URLSession` instances keyed by timeout configuration (requestTimeout + resourceTimeout). This improves performance by reusing sessions for requests with identical timeout settings instead of creating new sessions for each request.
-- **Tool Support**: For `Tool.Function.parameters`, use `[String: String]` instead of `[String: Any]` to maintain `Sendable` conformance. This simplifies JSON schema definitions while maintaining type safety.
+- **Tool Support**: `Tool.Function.parameters` uses `JSONSchema` (indirect enum with cases: `object`, `array`, `string`, `integer`, `number`, `boolean`, `null`) for type-safe parameter definitions. A deprecated `[String: String]` init is preserved for backward compatibility. See [ToolCalling.md](ToolCalling.md) and [ToolSupportSpec.md](ToolSupportSpec.md) for full tool calling and agent details.
 - **Testing**: Support Swift Testing with `#expect` for async tests. Key considerations:
   - Use array-based message initialization for simpler test syntax
   - Mock URLSession with URLProtocol for network tests

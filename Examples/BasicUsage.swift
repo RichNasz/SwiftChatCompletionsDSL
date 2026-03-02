@@ -26,8 +26,9 @@ func basicNonStreamingExample() async throws {
 		try TopP(0.9)
 	} messages: {
 		// Build the conversation using result builders
-		TextMessage(role: .system, content: "You are a helpful programming assistant.")
-		TextMessage(role: .user, content: "Explain the concept of async/await in Swift.")
+		// Use System() and UserMessage() convenience functions or TextMessage()
+		System("You are a helpful programming assistant.")
+		UserMessage("Explain the concept of async/await in Swift.")
 	}
 	
 	// Send the request and get the complete response
@@ -354,6 +355,301 @@ func agentExample() async throws {
 	}
 }
 
+/// Example demonstrating an Agent with multiple tools working together
+///
+/// This agent has access to weather, calendar, and restaurant tools,
+/// allowing it to handle complex queries that require combining information
+/// from multiple sources in a single conversation.
+func multiToolAgentExample() async throws {
+	let client = try LLMClient(
+		baseURL: "https://api.openai.com/v1/chat/completions",
+		apiKey: "your-api-key-here"
+	)
+
+	let agent = try Agent(
+		client: client,
+		model: "gpt-4o",
+		systemPrompt: """
+			You are a personal assistant that can check weather, look up calendar events,
+			and find restaurants. Combine information from multiple tools when helpful.
+			""",
+		maxToolIterations: 5
+	) {
+		try Temperature(0.7)
+		try MaxTokens(500)
+	} tools: {
+		// Tool 1: Weather lookup
+		AgentTool(
+			tool: Tool(function: Tool.Function(
+				name: "get_weather",
+				description: "Get current weather for a city",
+				parameters: .object(
+					properties: [
+						"city": .string(description: "City name"),
+						"unit": .string(
+							description: "Temperature unit",
+							enumValues: ["celsius", "fahrenheit"]
+						),
+					],
+					required: ["city"]
+				)
+			))
+		) { arguments in
+			let args = try JSONDecoder().decode(
+				[String: String].self,
+				from: arguments.data(using: .utf8)!
+			)
+			let city = args["city"] ?? "unknown"
+			// Simulate weather API response
+			return """
+				{"city": "\(city)", "temperature": 22, "unit": "celsius", "condition": "partly cloudy", "humidity": 65}
+				"""
+		}
+
+		// Tool 2: Calendar lookup
+		AgentTool(
+			tool: Tool(function: Tool.Function(
+				name: "get_calendar_events",
+				description: "Get calendar events for a specific date",
+				parameters: .object(
+					properties: [
+						"date": .string(description: "Date in YYYY-MM-DD format"),
+					],
+					required: ["date"]
+				)
+			))
+		) { arguments in
+			// Simulate calendar API response
+			return """
+				{"events": [
+					{"time": "10:00", "title": "Team standup", "duration": "30min"},
+					{"time": "12:00", "title": "Lunch free", "duration": "60min"},
+					{"time": "14:00", "title": "Design review", "duration": "45min"}
+				]}
+				"""
+		}
+
+		// Tool 3: Restaurant search
+		AgentTool(
+			tool: Tool(function: Tool.Function(
+				name: "search_restaurants",
+				description: "Search for restaurants near a location",
+				parameters: .object(
+					properties: [
+						"location": .string(description: "City or address"),
+						"cuisine": .string(description: "Type of cuisine (optional)"),
+						"outdoor_seating": .boolean(description: "Whether outdoor seating is required"),
+					],
+					required: ["location"]
+				)
+			))
+		) { arguments in
+			// Simulate restaurant search response
+			return """
+				{"restaurants": [
+					{"name": "Le Petit Bistro", "cuisine": "French", "rating": 4.5, "outdoor_seating": true},
+					{"name": "Sakura Garden", "cuisine": "Japanese", "rating": 4.7, "outdoor_seating": false},
+					{"name": "Trattoria Roma", "cuisine": "Italian", "rating": 4.3, "outdoor_seating": true}
+				]}
+				"""
+		}
+	}
+
+	// The model can call multiple tools to answer complex queries
+	print("--- Multi-tool query ---")
+	let response1 = try await agent.send(
+		"I'm in Paris today. What's the weather like, what's on my calendar, and can you suggest a restaurant with outdoor seating for my lunch break?"
+	)
+	print("Agent: \(response1)")
+
+	// Follow-up uses conversation history — no need to repeat context
+	print("\n--- Follow-up ---")
+	let response2 = try await agent.send(
+		"Actually, what about Japanese food instead?"
+	)
+	print("Agent: \(response2)")
+
+	// Inspect which tools were called
+	print("\n--- Tool activity log ---")
+	print("Registered tools: \(await agent.registeredToolNames)")
+	let transcript = await agent.transcript
+	for entry in transcript {
+		switch entry {
+		case .toolCall(let name, let args):
+			print("  Called \(name) with \(args)")
+		case .toolResult(let name, _, let duration):
+			print("  \(name) returned in \(duration)")
+		default:
+			break
+		}
+	}
+}
+
+/// Example demonstrating multi-agent orchestration
+///
+/// This pattern uses specialized agents for different domains and a coordinator
+/// that routes user requests to the appropriate agent. Each agent maintains
+/// its own conversation history and tools.
+func multiAgentOrchestrationExample() async throws {
+	let client = try LLMClient(
+		baseURL: "https://api.openai.com/v1/chat/completions",
+		apiKey: "your-api-key-here"
+	)
+
+	// --- Agent 1: Research Agent ---
+	// Specializes in looking up information
+	let researchAgent = try Agent(
+		client: client,
+		model: "gpt-4o",
+		systemPrompt: """
+			You are a research assistant. Use your tools to look up facts and provide
+			accurate, well-sourced answers. Always cite which tool you used.
+			"""
+	) {
+		try Temperature(0.3) // Low temperature for factual accuracy
+		try MaxTokens(300)
+	} tools: {
+		AgentTool(
+			tool: Tool(function: Tool.Function(
+				name: "search_knowledge_base",
+				description: "Search an internal knowledge base for information",
+				parameters: .object(
+					properties: [
+						"query": .string(description: "Search query"),
+						"category": .string(
+							description: "Category to search in",
+							enumValues: ["science", "history", "technology", "business"]
+						),
+					],
+					required: ["query"]
+				)
+			))
+		) { arguments in
+			return """
+				{"results": [
+					{"title": "Swift Concurrency", "snippet": "Swift concurrency model uses async/await, actors, and structured concurrency for safe parallel code."},
+					{"title": "Actor Model", "snippet": "Actors provide data isolation by ensuring only one task accesses their mutable state at a time."}
+				]}
+				"""
+		}
+	}
+
+	// --- Agent 2: Code Agent ---
+	// Specializes in writing and analyzing code
+	let codeAgent = try Agent(
+		client: client,
+		model: "gpt-4o",
+		systemPrompt: """
+			You are a code assistant. You can run code snippets and analyze their output.
+			Provide clear, well-commented code examples.
+			"""
+	) {
+		try Temperature(0.2) // Very low for precise code
+		try MaxTokens(500)
+	} tools: {
+		AgentTool(
+			tool: Tool(function: Tool.Function(
+				name: "run_code",
+				description: "Execute a Swift code snippet and return the output",
+				parameters: .object(
+					properties: [
+						"code": .string(description: "Swift code to execute"),
+					],
+					required: ["code"]
+				)
+			))
+		) { arguments in
+			// Simulate code execution
+			return """
+				{"output": "Hello, World!\\nExecution time: 0.002s", "exit_code": 0}
+				"""
+		}
+
+		AgentTool(
+			tool: Tool(function: Tool.Function(
+				name: "analyze_complexity",
+				description: "Analyze the time and space complexity of a code snippet",
+				parameters: .object(
+					properties: [
+						"code": .string(description: "Code to analyze"),
+					],
+					required: ["code"]
+				)
+			))
+		) { arguments in
+			return """
+				{"time_complexity": "O(n log n)", "space_complexity": "O(n)", "notes": "Dominated by the sorting step"}
+				"""
+		}
+	}
+
+	// --- Agent 3: Summary Agent ---
+	// Specializes in synthesizing information (no tools needed)
+	let summaryAgent = Agent(
+		client: client,
+		model: "gpt-4o",
+		systemPrompt: """
+			You are a summarization expert. You receive information gathered by other
+			assistants and synthesize it into a clear, concise summary for the user.
+			Structure your response with bullet points and a brief conclusion.
+			"""
+	)
+
+	// --- Orchestration Logic ---
+	// A simple router that sends queries to the right agent based on intent
+
+	/// Routes a user query to the appropriate specialized agent.
+	func route(_ query: String) async throws -> (agent: String, response: String) {
+		// Simple keyword-based routing (in production, use an LLM classifier)
+		let lowered = query.lowercased()
+		if lowered.contains("code") || lowered.contains("function") || lowered.contains("implement") {
+			let response = try await codeAgent.send(query)
+			return ("Code Agent", response)
+		} else if lowered.contains("research") || lowered.contains("explain") || lowered.contains("what is") {
+			let response = try await researchAgent.send(query)
+			return ("Research Agent", response)
+		} else {
+			let response = try await summaryAgent.send(query)
+			return ("Summary Agent", response)
+		}
+	}
+
+	// --- Run the orchestration ---
+
+	let queries = [
+		"What is the actor model in Swift concurrency?",
+		"Implement a simple async queue in Swift",
+		"Summarize the key benefits of structured concurrency",
+	]
+
+	var allResponses: [String] = []
+
+	for query in queries {
+		print("User: \(query)")
+		let (agentName, response) = try await route(query)
+		print("[\(agentName)] \(response)\n")
+		allResponses.append("[\(agentName)]: \(response)")
+	}
+
+	// Feed all responses to the summary agent for a final synthesis
+	print("--- Final Synthesis ---")
+	let synthesisPrompt = """
+		Here are findings from multiple research and coding assistants:
+
+		\(allResponses.joined(separator: "\n\n"))
+
+		Please provide a unified summary of everything learned.
+		"""
+	let synthesis = try await summaryAgent.send(synthesisPrompt)
+	print("Summary Agent: \(synthesis)")
+
+	// Each agent's history is independent
+	print("\n--- Agent Statistics ---")
+	print("Research Agent: \(await researchAgent.history.count) messages, \(await researchAgent.toolCount) tools")
+	print("Code Agent: \(await codeAgent.history.count) messages, \(await codeAgent.toolCount) tools")
+	print("Summary Agent: \(await summaryAgent.history.count) messages, \(await summaryAgent.toolCount) tools")
+}
+
 /// Example demonstrating timeout configuration for different use cases
 @available(macOS 13.0, iOS 16.0, *)
 func timeoutConfigurationExample() async throws {
@@ -506,6 +802,12 @@ struct ExampleRunner {
 
 			print("\n9. Agent Example:")
 			try await agentExample()
+
+			print("\n10. Multi-Tool Agent Example:")
+			try await multiToolAgentExample()
+
+			print("\n11. Multi-Agent Orchestration Example:")
+			try await multiAgentOrchestrationExample()
 
 		} catch {
 			print("Example failed with error: \(error)")
