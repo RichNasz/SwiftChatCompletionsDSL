@@ -111,10 +111,27 @@ print(response.firstContent ?? "No response")  // Convenience property
 - ``RequestTimeout``
 - ``ResourceTimeout``
 
-### Tool Support
+### Tool Calling
 
 - ``Tool``
 - ``Tools``
+- ``JSONSchema``
+- ``ToolCall``
+- ``ToolCallDelta``
+- ``ToolChoice``
+- ``ToolChoiceParam``
+- ``AssistantToolCallMessage``
+- ``ToolResultMessage``
+
+### Tool Session & Agent
+
+- ``ToolSession``
+- ``ToolSessionResult``
+- ``ToolCallLogEntry``
+- ``Agent``
+- ``AgentTool``
+- ``AgentToolBuilder``
+- ``TranscriptEntry``
 
 ### Conversation Management
 

@@ -10,7 +10,7 @@ import Foundation
 import SwiftChatCompletionsDSL
 
 /// Basic example demonstrating non-streaming chat completion
-@available(macOS 12.0, iOS 15.0, *)
+@available(macOS 13.0, iOS 16.0, *)
 func basicNonStreamingExample() async throws {
 	// Initialize the LLM client with your preferred endpoint
 	let client = try LLMClient(
@@ -53,7 +53,7 @@ func basicNonStreamingExample() async throws {
 }
 
 /// Example demonstrating streaming chat completion for real-time responses
-@available(macOS 12.0, iOS 15.0, *)
+@available(macOS 13.0, iOS 16.0, *)
 func basicStreamingExample() async throws {
 	// Initialize the LLM client
 	let client = try LLMClient(
@@ -93,7 +93,7 @@ func basicStreamingExample() async throws {
 }
 
 /// Example using custom configuration and error handling
-@available(macOS 12.0, iOS 15.0, *)
+@available(macOS 13.0, iOS 16.0, *)
 func advancedConfigurationExample() async throws {
 	// Custom URLSession configuration for timeouts
 	let sessionConfig = URLSessionConfiguration.default
@@ -143,7 +143,7 @@ func advancedConfigurationExample() async throws {
 }
 
 /// Example using array-based message initialization for conversation history
-@available(macOS 12.0, iOS 15.0, *)
+@available(macOS 13.0, iOS 16.0, *)
 func conversationHistoryExample() async throws {
 	let client = try LLMClient(
 		baseURL: "https://api.openai.com/v1/chat/completions",
@@ -172,7 +172,7 @@ func conversationHistoryExample() async throws {
 }
 
 /// Example using ChatConversation for managing ongoing conversations
-@available(macOS 12.0, iOS 15.0, *)
+@available(macOS 13.0, iOS 16.0, *)
 func managedConversationExample() async throws {
 	let client = try LLMClient(
 		baseURL: "https://api.openai.com/v1/chat/completions",
@@ -220,32 +220,37 @@ func managedConversationExample() async throws {
 	print("Final conversation has \(conversation.history.count) messages")
 }
 
-/// Example demonstrating tool/function calling (if supported by the model)
-@available(macOS 12.0, iOS 15.0, *)
+/// Example demonstrating tool/function calling with JSONSchema
 func functionCallingExample() async throws {
 	let client = try LLMClient(
 		baseURL: "https://api.openai.com/v1/chat/completions",
 		apiKey: "your-api-key-here"
 	)
-	
-	// Define available tools/functions
+
+	// Define tools with type-safe JSONSchema parameters
 	let weatherTool = Tool(function: Tool.Function(
 		name: "get_weather",
 		description: "Get the current weather for a location",
-		parameters: [
-			"location": "string",
-			"unit": "string"
-		]
+		parameters: .object(
+			properties: [
+				"location": .string(description: "The city and state, e.g. San Francisco, CA"),
+				"unit": .string(description: "Temperature unit", enumValues: ["celsius", "fahrenheit"]),
+			],
+			required: ["location"]
+		)
 	))
-	
+
 	let calculatorTool = Tool(function: Tool.Function(
 		name: "calculate",
 		description: "Perform basic mathematical calculations",
-		parameters: [
-			"expression": "string"
-		]
+		parameters: .object(
+			properties: [
+				"expression": .string(description: "The math expression to evaluate"),
+			],
+			required: ["expression"]
+		)
 	))
-	
+
 	let request = try ChatRequest(model: "gpt-4o") {
 		try Temperature(0.1)
 		try MaxTokens(200)
@@ -253,17 +258,104 @@ func functionCallingExample() async throws {
 	} messages: {
 		TextMessage(role: .user, content: "What's the weather like in San Francisco and what's 15 * 23?")
 	}
-	
+
 	let response = try await client.complete(request)
-	
+
 	if let choice = response.choices.first {
 		print("Assistant response: \(choice.message.content)")
 		print("Finish reason: \(choice.finishReason ?? "none")")
 	}
 }
 
+/// Example demonstrating ToolSession for automatic tool-calling loops
+func toolSessionExample() async throws {
+	let client = try LLMClient(
+		baseURL: "https://api.openai.com/v1/chat/completions",
+		apiKey: "your-api-key-here"
+	)
+
+	let weatherTool = Tool(function: Tool.Function(
+		name: "get_weather",
+		description: "Get weather for a location",
+		parameters: .object(
+			properties: [
+				"location": .string(description: "City name"),
+			],
+			required: ["location"]
+		)
+	))
+
+	// ToolSession handles the send → tool_calls → execute → results → repeat loop
+	let session = ToolSession(
+		client: client,
+		tools: [weatherTool],
+		handlers: ["get_weather": { arguments in
+			// Parse arguments JSON and return result
+			return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+		}]
+	)
+
+	let result = try await session.run(
+		model: "gpt-4o",
+		messages: [TextMessage(role: .user, content: "What's the weather in Paris?")]
+	)
+
+	print("Final response: \(result.response.firstContent ?? "")")
+	print("Tool calls made: \(result.log.count)")
+	print("Iterations: \(result.iterations)")
+}
+
+/// Example demonstrating the Agent actor for persistent conversations with tools
+func agentExample() async throws {
+	let client = try LLMClient(
+		baseURL: "https://api.openai.com/v1/chat/completions",
+		apiKey: "your-api-key-here"
+	)
+
+	// Create an Agent with tools using the builder pattern
+	let agent = try Agent(
+		client: client,
+		model: "gpt-4o",
+		systemPrompt: "You are a helpful assistant with access to weather data."
+	) {
+		try Temperature(0.7)
+	} tools: {
+		AgentTool(
+			tool: Tool(function: Tool.Function(
+				name: "get_weather",
+				description: "Get weather for a location",
+				parameters: .object(
+					properties: ["location": .string(description: "City name")],
+					required: ["location"]
+				)
+			))
+		) { arguments in
+			return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+		}
+	}
+
+	// Multi-turn conversation - agent maintains history automatically
+	let response1 = try await agent.send("What's the weather in Paris?")
+	print("Agent: \(response1)")
+
+	let response2 = try await agent.send("How about London?")
+	print("Agent: \(response2)")
+
+	// Check transcript for debugging
+	let transcript = await agent.transcript
+	for entry in transcript {
+		switch entry {
+		case .userMessage(let msg): print("  [User] \(msg)")
+		case .assistantMessage(let msg): print("  [Assistant] \(msg)")
+		case .toolCall(let name, _): print("  [Tool Call] \(name)")
+		case .toolResult(let name, _, let duration): print("  [Tool Result] \(name) (\(duration))")
+		case .error(let msg): print("  [Error] \(msg)")
+		}
+	}
+}
+
 /// Example demonstrating timeout configuration for different use cases
-@available(macOS 12.0, iOS 15.0, *)
+@available(macOS 13.0, iOS 16.0, *)
 func timeoutConfigurationExample() async throws {
 	let client = try LLMClient(
 		baseURL: "https://api.openai.com/v1/chat/completions",
@@ -378,7 +470,7 @@ func timeoutConfigurationExample() async throws {
 
 // MARK: - Main execution examples
 
-@available(macOS 12.0, iOS 15.0, *)
+@available(macOS 13.0, iOS 16.0, *)
 @main
 struct ExampleRunner {
 	static func main() async {
@@ -408,6 +500,12 @@ struct ExampleRunner {
 
 			print("\n7. Timeout Configuration Example:")
 			try await timeoutConfigurationExample()
+
+			print("\n8. Tool Session Example:")
+			try await toolSessionExample()
+
+			print("\n9. Agent Example:")
+			try await agentExample()
 
 		} catch {
 			print("Example failed with error: \(error)")

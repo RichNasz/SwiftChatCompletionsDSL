@@ -7,6 +7,8 @@ To support conversation history, the DSL is extended with:
 - An additional initializer for `ChatRequest` that accepts a pre-built array of messages (`[any ChatMessage]`), enabling users to pass existing conversation history directly without relying on the result builder.
 - A new `ChatConversation` struct for managing persistent conversation history, with methods to append messages and generate `ChatRequest`s. This facilitates stateful interactions, where history can be built incrementally across multiple requests.
 
+For tool calling and agent capabilities, see [ToolCalling.md](ToolCalling.md).
+
 ## Goals
 - **Explicit Configuration**: Require `baseURL` (full endpoint URL) in client initialization and `model` in every request, without defaults or path appending.
 - **Optional Parameters**: Allow any combination of optional parameters (`temperature`, `maxTokens`, `topP`, `frequencyPenalty`, `presencePenalty`, `n`, `logitBias`, `user`) via a `@ChatConfigBuilder` block, minimizing user code while ensuring type safety.

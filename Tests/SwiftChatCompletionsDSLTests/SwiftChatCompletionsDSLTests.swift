@@ -735,7 +735,13 @@ import Testing
     let function = Tool.Function(
         name: "get_weather",
         description: "Get weather for a location",
-        parameters: ["location": "string", "unit": "celsius"]
+        parameters: .object(
+            properties: [
+                "location": .string(description: "The city name"),
+                "unit": .string(description: "Temperature unit"),
+            ],
+            required: ["location"]
+        )
     )
     let tool = Tool(function: function)
 
@@ -749,9 +755,16 @@ import Testing
     #expect(functionJson?["name"] as? String == "get_weather")
     #expect(functionJson?["description"] as? String == "Get weather for a location")
 
-    let params = functionJson?["parameters"] as? [String: String]
-    #expect(params?["location"] == "string")
-    #expect(params?["unit"] == "celsius")
+    let params = functionJson?["parameters"] as? [String: Any]
+    #expect(params?["type"] as? String == "object")
+    #expect(params?["additionalProperties"] as? Bool == false)
+
+    let properties = params?["properties"] as? [String: Any]
+    #expect(properties?["location"] != nil)
+    #expect(properties?["unit"] != nil)
+
+    let required = params?["required"] as? [String]
+    #expect(required == ["location"])
 }
 
 // MARK: - Mock URLProtocol for Network Tests
@@ -786,10 +799,12 @@ class MockURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-// MARK: - LLMClient Network Tests (Serialized to avoid shared state conflicts)
+// MARK: - All Network Tests (Serialized to avoid shared MockURLProtocol state)
 
 @Suite(.serialized)
-struct LLMClientNetworkTests {
+struct AllNetworkTests {
+
+    // MARK: LLMClient Tests
 
     @Test func completeSuccess() async throws {
         let config = URLSessionConfiguration.ephemeral
@@ -1180,4 +1195,954 @@ struct LLMClientNetworkTests {
             }
         }
     }
+
+// MARK: - JSONSchema Encoding Tests
+
+@Test func testJSONSchemaStringEncoding() throws {
+    let schema = JSONSchema.string(description: "A city name")
+    let data = try JSONEncoder().encode(schema)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["type"] as? String == "string")
+    #expect(json?["description"] as? String == "A city name")
 }
+
+@Test func testJSONSchemaStringWithEnum() throws {
+    let schema = JSONSchema.string(description: "Unit", enumValues: ["celsius", "fahrenheit"])
+    let data = try JSONEncoder().encode(schema)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["type"] as? String == "string")
+    #expect(json?["enum"] as? [String] == ["celsius", "fahrenheit"])
+}
+
+@Test func testJSONSchemaIntegerEncoding() throws {
+    let schema = JSONSchema.integer(description: "Age", minimum: 0, maximum: 150)
+    let data = try JSONEncoder().encode(schema)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["type"] as? String == "integer")
+    #expect(json?["description"] as? String == "Age")
+    #expect(json?["minimum"] as? Int == 0)
+    #expect(json?["maximum"] as? Int == 150)
+}
+
+@Test func testJSONSchemaNumberEncoding() throws {
+    let schema = JSONSchema.number(description: "Price", minimum: 0.0, maximum: 999.99)
+    let data = try JSONEncoder().encode(schema)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["type"] as? String == "number")
+    #expect(json?["description"] as? String == "Price")
+    #expect(json?["minimum"] as? Double == 0.0)
+    #expect(json?["maximum"] as? Double == 999.99)
+}
+
+@Test func testJSONSchemaBooleanEncoding() throws {
+    let schema = JSONSchema.boolean(description: "Is active")
+    let data = try JSONEncoder().encode(schema)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["type"] as? String == "boolean")
+    #expect(json?["description"] as? String == "Is active")
+}
+
+@Test func testJSONSchemaArrayEncoding() throws {
+    let schema = JSONSchema.array(items: .string(description: "Tag"))
+    let data = try JSONEncoder().encode(schema)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["type"] as? String == "array")
+    let items = json?["items"] as? [String: Any]
+    #expect(items?["type"] as? String == "string")
+}
+
+@Test func testJSONSchemaObjectEncoding() throws {
+    let schema = JSONSchema.object(
+        properties: [
+            "name": .string(description: "User name"),
+            "age": .integer(description: "User age"),
+        ],
+        required: ["name"]
+    )
+    let data = try JSONEncoder().encode(schema)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["type"] as? String == "object")
+    #expect(json?["additionalProperties"] as? Bool == false)
+    #expect(json?["required"] as? [String] == ["name"])
+
+    let properties = json?["properties"] as? [String: Any]
+    #expect(properties?["name"] != nil)
+    #expect(properties?["age"] != nil)
+}
+
+@Test func testJSONSchemaEquality() {
+    let a = JSONSchema.string(description: "test")
+    let b = JSONSchema.string(description: "test")
+    let c = JSONSchema.string(description: "other")
+
+    #expect(a == b)
+    #expect(a != c)
+}
+
+// MARK: - ToolCall Decoding Tests
+
+@Test func testToolCallDecoding() throws {
+    let json = """
+    {
+        "id": "call_abc123",
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "arguments": "{\\"location\\": \\"Paris\\"}"
+        }
+    }
+    """
+    let data = json.data(using: .utf8)!
+    let toolCall = try JSONDecoder().decode(ToolCall.self, from: data)
+
+    #expect(toolCall.id == "call_abc123")
+    #expect(toolCall.type == "function")
+    #expect(toolCall.function.name == "get_weather")
+    #expect(toolCall.function.arguments == "{\"location\": \"Paris\"}")
+}
+
+// MARK: - ToolCallDelta Decoding Tests
+
+@Test func testToolCallDeltaDecoding() throws {
+    let json = """
+    {
+        "index": 0,
+        "id": "call_abc123",
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "arguments": "{\\"loc"
+        }
+    }
+    """
+    let data = json.data(using: .utf8)!
+    let delta = try JSONDecoder().decode(ToolCallDelta.self, from: data)
+
+    #expect(delta.index == 0)
+    #expect(delta.id == "call_abc123")
+    #expect(delta.type == "function")
+    #expect(delta.function?.name == "get_weather")
+    #expect(delta.function?.arguments == "{\"loc")
+}
+
+@Test func testToolCallDeltaPartial() throws {
+    let json = """
+    {
+        "index": 0,
+        "function": {
+            "arguments": "ation\\": \\"Paris\\"}"
+        }
+    }
+    """
+    let data = json.data(using: .utf8)!
+    let delta = try JSONDecoder().decode(ToolCallDelta.self, from: data)
+
+    #expect(delta.index == 0)
+    #expect(delta.id == nil)
+    #expect(delta.type == nil)
+    #expect(delta.function?.name == nil)
+    #expect(delta.function?.arguments == "ation\": \"Paris\"}")
+}
+
+// MARK: - ToolChoice Encoding Tests
+
+@Test func testToolChoiceAutoEncoding() throws {
+    let data = try JSONEncoder().encode(ToolChoice.auto)
+    let str = String(data: data, encoding: .utf8)
+    #expect(str == "\"auto\"")
+}
+
+@Test func testToolChoiceNoneEncoding() throws {
+    let data = try JSONEncoder().encode(ToolChoice.none)
+    let str = String(data: data, encoding: .utf8)
+    #expect(str == "\"none\"")
+}
+
+@Test func testToolChoiceRequiredEncoding() throws {
+    let data = try JSONEncoder().encode(ToolChoice.required)
+    let str = String(data: data, encoding: .utf8)
+    #expect(str == "\"required\"")
+}
+
+@Test func testToolChoiceFunctionEncoding() throws {
+    let data = try JSONEncoder().encode(ToolChoice.function("get_weather"))
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["type"] as? String == "function")
+    let function = json?["function"] as? [String: String]
+    #expect(function?["name"] == "get_weather")
+}
+
+// MARK: - AssistantToolCallMessage Tests
+
+@Test func testAssistantToolCallMessageEncoding() throws {
+    let toolCall = ToolCall(
+        id: "call_123",
+        type: "function",
+        function: ToolCall.FunctionCall(name: "get_weather", arguments: "{\"location\":\"Paris\"}")
+    )
+    let message = AssistantToolCallMessage(content: nil, toolCalls: [toolCall])
+
+    let data = try JSONEncoder().encode(message)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["role"] as? String == "assistant")
+    let toolCalls = json?["tool_calls"] as? [[String: Any]]
+    #expect(toolCalls?.count == 1)
+    #expect(toolCalls?[0]["id"] as? String == "call_123")
+}
+
+// MARK: - ToolResultMessage Tests
+
+@Test func testToolResultMessageEncoding() throws {
+    let message = ToolResultMessage(toolCallId: "call_123", content: "72°F, sunny")
+
+    let data = try JSONEncoder().encode(message)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["role"] as? String == "tool")
+    #expect(json?["tool_call_id"] as? String == "call_123")
+    #expect(json?["content"] as? String == "72°F, sunny")
+}
+
+// MARK: - ChatResponse with Tool Calls Tests
+
+@Test func testChatResponseWithToolCalls() throws {
+    let jsonString = """
+    {
+        "id": "chatcmpl-tool",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": null,
+                "tool_calls": [{
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\\"location\\":\\"Paris\\"}"
+                    }
+                }]
+            },
+            "finish_reason": "tool_calls"
+        }],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    }
+    """
+
+    let data = jsonString.data(using: .utf8)!
+    let response = try JSONDecoder().decode(ChatResponse.self, from: data)
+
+    // content should decode null as ""
+    #expect(response.choices[0].message.content == "")
+    #expect(response.choices[0].message.toolCalls?.count == 1)
+    #expect(response.choices[0].message.toolCalls?[0].id == "call_abc")
+    #expect(response.choices[0].message.toolCalls?[0].function.name == "get_weather")
+    #expect(response.firstFinishReason == "tool_calls")
+    #expect(response.requiresToolExecution == true)
+    #expect(response.firstToolCalls?.count == 1)
+}
+
+@Test func testChatResponseWithoutToolCalls() throws {
+    let jsonString = """
+    {
+        "id": "chatcmpl-text",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "Hello!"
+            },
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+    }
+    """
+
+    let data = jsonString.data(using: .utf8)!
+    let response = try JSONDecoder().decode(ChatResponse.self, from: data)
+
+    #expect(response.choices[0].message.content == "Hello!")
+    #expect(response.choices[0].message.toolCalls == nil)
+    #expect(response.requiresToolExecution == false)
+    #expect(response.firstToolCalls == nil)
+}
+
+// MARK: - ChatDelta with Tool Calls Tests
+
+@Test func testChatDeltaWithToolCalls() throws {
+    let jsonString = """
+    {
+        "choices": [{
+            "index": 0,
+            "delta": {
+                "role": "assistant",
+                "tool_calls": [{
+                    "index": 0,
+                    "id": "call_abc",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\\"loc"
+                    }
+                }]
+            },
+            "finish_reason": null
+        }]
+    }
+    """
+
+    let data = jsonString.data(using: .utf8)!
+    let delta = try JSONDecoder().decode(ChatDelta.self, from: data)
+
+    #expect(delta.firstToolCallDeltas?.count == 1)
+    #expect(delta.firstToolCallDeltas?[0].id == "call_abc")
+    #expect(delta.firstToolCallDeltas?[0].function?.name == "get_weather")
+}
+
+// MARK: - ChatRequest with ToolChoice Tests
+
+@Test func testChatRequestToolChoiceEncoding() throws {
+    var request = try ChatRequest(model: "gpt-4", messages: [
+        TextMessage(role: .user, content: "Test"),
+    ])
+    request.toolChoice = .auto
+
+    let data = try JSONEncoder().encode(request)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["tool_choice"] as? String == "auto")
+}
+
+@Test func testChatRequestToolChoiceOmittedWhenNil() throws {
+    let request = try ChatRequest(model: "gpt-4", messages: [
+        TextMessage(role: .user, content: "Test"),
+    ])
+
+    let data = try JSONEncoder().encode(request)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["tool_choice"] == nil)
+}
+
+// MARK: - Tool with JSONSchema Tests
+
+@Test func testToolWithJSONSchema() throws {
+    let tool = Tool(function: Tool.Function(
+        name: "search",
+        description: "Search the web",
+        parameters: .object(
+            properties: [
+                "query": .string(description: "Search query"),
+                "limit": .integer(description: "Max results", minimum: 1, maximum: 100),
+            ],
+            required: ["query"]
+        )
+    ))
+
+    let data = try JSONEncoder().encode(tool)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    let function = json?["function"] as? [String: Any]
+    let params = function?["parameters"] as? [String: Any]
+    #expect(params?["type"] as? String == "object")
+
+    let props = params?["properties"] as? [String: Any]
+    let query = props?["query"] as? [String: Any]
+    #expect(query?["type"] as? String == "string")
+    #expect(query?["description"] as? String == "Search query")
+
+    let limit = props?["limit"] as? [String: Any]
+    #expect(limit?["type"] as? String == "integer")
+    #expect(limit?["minimum"] as? Int == 1)
+    #expect(limit?["maximum"] as? Int == 100)
+}
+
+// MARK: - Deprecated Tool.Function Backward Compat Test
+
+@Test func testDeprecatedToolFunctionInit() throws {
+    let function = Tool.Function(
+        name: "test",
+        description: "Test function",
+        parameters: ["param1": "description1"]
+    )
+
+    // Should convert to JSONSchema.object
+    let data = try JSONEncoder().encode(function)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    let params = json?["parameters"] as? [String: Any]
+    #expect(params?["type"] as? String == "object")
+}
+
+// MARK: - New LLMError Cases Tests
+
+@Test func testLLMErrorMaxIterationsExceeded() {
+    let error = LLMError.maxIterationsExceeded(10)
+    #expect(error == LLMError.maxIterationsExceeded(10))
+    #expect(error != LLMError.maxIterationsExceeded(5))
+}
+
+@Test func testLLMErrorUnknownTool() {
+    let error = LLMError.unknownTool("unknown_func")
+    #expect(error == LLMError.unknownTool("unknown_func"))
+    #expect(error != LLMError.unknownTool("other_func"))
+}
+
+@Test func testLLMErrorToolExecutionFailed() {
+    let error = LLMError.toolExecutionFailed(toolName: "test", message: "failed")
+    #expect(error == LLMError.toolExecutionFailed(toolName: "test", message: "failed"))
+    #expect(error != LLMError.toolExecutionFailed(toolName: "test", message: "other"))
+}
+
+// MARK: - ChatConversation Tool Methods Tests
+
+@Test func testChatConversationToolMethods() {
+    var conversation = ChatConversation()
+    conversation.addUser(content: "What's the weather?")
+
+    let toolCall = ToolCall(
+        id: "call_1",
+        type: "function",
+        function: ToolCall.FunctionCall(name: "get_weather", arguments: "{}")
+    )
+    conversation.addAssistantToolCalls(content: nil, toolCalls: [toolCall])
+    conversation.addToolResult(toolCallId: "call_1", content: "72°F")
+
+    #expect(conversation.messageCount == 3)
+    #expect(conversation.lastMessageRole == .tool)
+}
+
+// MARK: - ToolChoiceParam Tests
+
+@Test func testToolChoiceParamApply() throws {
+    let request = try ChatRequest(model: "gpt-4", config: {
+        ToolChoiceParam(.required)
+    }, messages: [
+        TextMessage(role: .user, content: "Test"),
+    ])
+
+    #expect(request.toolChoice == .required)
+}
+
+// MARK: - ToolSession Integration Tests
+
+struct ToolSessionTests {
+
+    @Test func toolSessionSingleToolCall() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        // First response: tool call
+        let toolCallResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\\"location\\":\\"Paris\\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        }
+        """
+
+        // Second response: final text
+        let textResponse = """
+        {
+            "id": "chatcmpl-2",
+            "object": "chat.completion",
+            "created": 1700000001,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The weather in Paris is 72°F and sunny."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}
+        }
+        """
+
+        var callCount = 0
+        MockURLProtocol.requestHandler = { request in
+            callCount += 1
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let body = callCount == 1 ? toolCallResponse : textResponse
+            return (response, body.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let tool = Tool(function: Tool.Function(
+            name: "get_weather",
+            description: "Get weather",
+            parameters: .object(
+                properties: ["location": .string(description: "City")],
+                required: ["location"]
+            )
+        ))
+
+        let session = ToolSession(
+            client: client,
+            tools: [tool],
+            handlers: ["get_weather": { _ in
+                return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+            }]
+        )
+
+        let result = try await session.run(
+            model: "gpt-4",
+            messages: [TextMessage(role: .user, content: "Weather in Paris?")]
+        )
+
+        #expect(result.response.firstContent == "The weather in Paris is 72°F and sunny.")
+        #expect(result.iterations == 1)
+        #expect(result.log.count == 1)
+        #expect(result.log[0].name == "get_weather")
+        #expect(callCount == 2)
+    }
+
+    @Test func toolSessionParallelToolCalls() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let toolCallResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{\\"location\\":\\"Paris\\"}"}
+                        },
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{\\"location\\":\\"London\\"}"}
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        }
+        """
+
+        let textResponse = """
+        {
+            "id": "chatcmpl-2",
+            "object": "chat.completion",
+            "created": 1700000001,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Both cities are sunny."},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 30, "completion_tokens": 5, "total_tokens": 35}
+        }
+        """
+
+        var callCount = 0
+        MockURLProtocol.requestHandler = { request in
+            callCount += 1
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            let body = callCount == 1 ? toolCallResponse : textResponse
+            return (response, body.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let tool = Tool(function: Tool.Function(
+            name: "get_weather",
+            description: "Get weather",
+            parameters: .object(properties: ["location": .string()], required: ["location"])
+        ))
+
+        let session = ToolSession(
+            client: client,
+            tools: [tool],
+            handlers: ["get_weather": { args in
+                return "{\"temp\": 72}"
+            }]
+        )
+
+        let result = try await session.run(
+            model: "gpt-4",
+            messages: [TextMessage(role: .user, content: "Weather in Paris and London?")]
+        )
+
+        #expect(result.log.count == 2)
+        #expect(result.iterations == 1)
+    }
+
+    @Test func toolSessionMaxIterationsExceeded() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        // Always return tool calls — never a final response
+        let toolCallResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "loop_tool", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return (response, toolCallResponse.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let tool = Tool(function: Tool.Function(
+            name: "loop_tool",
+            description: "Always loops",
+            parameters: .object(properties: [:], required: [])
+        ))
+
+        let session = ToolSession(
+            client: client,
+            tools: [tool],
+            maxIterations: 2,
+            handlers: ["loop_tool": { _ in "result" }]
+        )
+
+        do {
+            _ = try await session.run(
+                model: "gpt-4",
+                messages: [TextMessage(role: .user, content: "Loop")]
+            )
+            #expect(Bool(false), "Should have thrown maxIterationsExceeded")
+        } catch LLMError.maxIterationsExceeded(let max) {
+            #expect(max == 2)
+        } catch {
+            #expect(Bool(false), "Wrong error: \(error)")
+        }
+    }
+
+    @Test func toolSessionUnknownTool() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let toolCallResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "unknown_func", "arguments": "{}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return (response, toolCallResponse.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let tool = Tool(function: Tool.Function(
+            name: "known_tool",
+            description: "Known",
+            parameters: .object(properties: [:], required: [])
+        ))
+
+        let session = ToolSession(
+            client: client,
+            tools: [tool],
+            handlers: ["known_tool": { _ in "ok" }]
+        )
+
+        do {
+            _ = try await session.run(
+                model: "gpt-4",
+                messages: [TextMessage(role: .user, content: "Test")]
+            )
+            #expect(Bool(false), "Should have thrown unknownTool")
+        } catch LLMError.unknownTool(let name) {
+            #expect(name == "unknown_func")
+        } catch {
+            #expect(Bool(false), "Wrong error: \(error)")
+        }
+    }
+}
+
+// MARK: - Agent Tests
+
+struct AgentTests {
+
+    @Test func agentMultiTurnWithToolCalls() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let toolCallResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "add", "arguments": "{\\"a\\": 2, \\"b\\": 3}"}
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        }
+        """
+
+        let textResponse = """
+        {
+            "id": "chatcmpl-2",
+            "object": "chat.completion",
+            "created": 1700000001,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "2 + 3 = 5"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25}
+        }
+        """
+
+        var callCount = 0
+        MockURLProtocol.requestHandler = { request in
+            callCount += 1
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            let body = callCount == 1 ? toolCallResponse : textResponse
+            return (response, body.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let addTool = Tool(function: Tool.Function(
+            name: "add",
+            description: "Add two numbers",
+            parameters: .object(
+                properties: ["a": .integer(), "b": .integer()],
+                required: ["a", "b"]
+            )
+        ))
+
+        let agent = Agent(
+            client: client,
+            model: "gpt-4",
+            systemPrompt: "You are a calculator.",
+            tools: [addTool],
+            toolHandlers: ["add": { args in "5" }]
+        )
+
+        let response = try await agent.send("What is 2 + 3?")
+        #expect(response == "2 + 3 = 5")
+
+        let history = await agent.history
+        #expect(history.count >= 2) // system + user + tool messages + assistant
+    }
+
+    @Test func agentTranscriptLogging() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let textResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return (response, textResponse.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let agent = Agent(client: client, model: "gpt-4")
+
+        _ = try await agent.send("Hi")
+
+        let transcript = await agent.transcript
+        #expect(transcript.count == 2)
+        if case .userMessage(let msg) = transcript[0] {
+            #expect(msg == "Hi")
+        } else {
+            #expect(Bool(false), "Expected userMessage")
+        }
+        if case .assistantMessage(let msg) = transcript[1] {
+            #expect(msg == "Hello!")
+        } else {
+            #expect(Bool(false), "Expected assistantMessage")
+        }
+    }
+
+    @Test func agentReset() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let textResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return (response, textResponse.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let agent = Agent(client: client, model: "gpt-4")
+
+        _ = try await agent.send("Hi")
+        let historyBefore = await agent.history
+        #expect(!historyBefore.isEmpty)
+
+        await agent.reset()
+
+        let historyAfter = await agent.history
+        #expect(historyAfter.isEmpty)
+        let transcriptAfter = await agent.transcript
+        #expect(transcriptAfter.isEmpty)
+    }
+} // end AgentTests
+
+} // end AllNetworkTests

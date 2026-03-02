@@ -81,6 +81,12 @@ public enum LLMError: Error, Equatable {
 	case missingBaseURL
 	/// Model name is missing or empty
 	case missingModel
+	/// Tool-calling loop exceeded maximum iterations
+	case maxIterationsExceeded(Int)
+	/// Tool name not found in registered handlers
+	case unknownTool(String)
+	/// Tool handler threw an error during execution
+	case toolExecutionFailed(toolName: String, message: String)
 }
 
 // MARK: - Validation Helpers
@@ -217,7 +223,7 @@ public protocol ChatMessage: Encodable, Sendable {
 /// ## Built-in Parameters
 /// See ``Temperature``, ``MaxTokens``, ``TopP``, ``FrequencyPenalty``, ``PresencePenalty``, 
 /// ``N``, ``User``, ``Stop``, ``LogitBias``, and ``Tools`` for examples.
-public protocol ChatConfigParameter {
+public protocol ChatConfigParameter: Sendable {
 	/// Apply this configuration parameter to the given request.
 	/// - Parameter request: The request to modify
 	func apply(to request: inout ChatRequest)
@@ -868,6 +874,188 @@ public struct ResourceTimeout: ChatConfigParameter {
 	}
 }
 
+// MARK: - JSON Schema
+
+/// Type-safe JSON Schema representation for tool parameter definitions.
+///
+/// `JSONSchema` provides a Swift-native way to define JSON Schema objects
+/// that describe tool parameters. This replaces raw `[String: String]` dictionaries
+/// with compile-time type safety.
+///
+/// ## Example Usage
+/// ```swift
+/// let schema = JSONSchema.object(
+///     properties: [
+///         "location": .string(description: "The city name"),
+///         "unit": .string(description: "Temperature unit", enumValues: ["celsius", "fahrenheit"]),
+///     ],
+///     required: ["location"]
+/// )
+/// ```
+public indirect enum JSONSchema: Sendable, Equatable, Encodable {
+	/// JSON Schema object type with named properties and required field list.
+	case object(properties: [String: JSONSchema], required: [String])
+	/// JSON Schema array type with a schema for array items.
+	case array(items: JSONSchema)
+	/// JSON Schema string type with optional description and enum constraint.
+	case string(description: String? = nil, enumValues: [String]? = nil)
+	/// JSON Schema integer type with optional description and range constraints.
+	case integer(description: String? = nil, minimum: Int? = nil, maximum: Int? = nil)
+	/// JSON Schema number type with optional description and range constraints.
+	case number(description: String? = nil, minimum: Double? = nil, maximum: Double? = nil)
+	/// JSON Schema boolean type with optional description.
+	case boolean(description: String? = nil)
+
+	public func encode(to encoder: Encoder) throws {
+		var container = encoder.container(keyedBy: SchemaKeys.self)
+
+		switch self {
+		case .object(let properties, let required):
+			try container.encode("object", forKey: .type)
+			try container.encode(properties, forKey: .properties)
+			if !required.isEmpty {
+				try container.encode(required, forKey: .required)
+			}
+			try container.encode(false, forKey: .additionalProperties)
+
+		case .array(let items):
+			try container.encode("array", forKey: .type)
+			try container.encode(items, forKey: .items)
+
+		case .string(let description, let enumValues):
+			try container.encode("string", forKey: .type)
+			try container.encodeIfPresent(description, forKey: .description)
+			try container.encodeIfPresent(enumValues, forKey: .enumValues)
+
+		case .integer(let description, let minimum, let maximum):
+			try container.encode("integer", forKey: .type)
+			try container.encodeIfPresent(description, forKey: .description)
+			try container.encodeIfPresent(minimum, forKey: .minimum)
+			try container.encodeIfPresent(maximum, forKey: .maximum)
+
+		case .number(let description, let minimum, let maximum):
+			try container.encode("number", forKey: .type)
+			try container.encodeIfPresent(description, forKey: .description)
+			try container.encodeIfPresent(minimum, forKey: .minimum)
+			try container.encodeIfPresent(maximum, forKey: .maximum)
+
+		case .boolean(let description):
+			try container.encode("boolean", forKey: .type)
+			try container.encodeIfPresent(description, forKey: .description)
+		}
+	}
+
+	private enum SchemaKeys: String, CodingKey {
+		case type, properties, required, additionalProperties, items
+		case description, minimum, maximum
+		case enumValues = "enum"
+	}
+}
+
+// MARK: - Tool Call Types
+
+/// Represents a tool call returned by the model in a non-streaming response.
+public struct ToolCall: Codable, Sendable, Equatable {
+	/// Unique identifier for this tool call
+	public let id: String
+	/// The type of tool call (typically "function")
+	public let type: String
+	/// The function call details
+	public let function: FunctionCall
+
+	/// Represents the function name and arguments in a tool call.
+	public struct FunctionCall: Codable, Sendable, Equatable {
+		/// The name of the function to call
+		public let name: String
+		/// The arguments as a raw JSON string
+		public let arguments: String
+	}
+}
+
+/// Represents an incremental tool call from a streaming delta.
+public struct ToolCallDelta: Codable, Sendable, Equatable {
+	/// Index of this tool call in the array
+	public let index: Int
+	/// Tool call ID (present in first chunk)
+	public let id: String?
+	/// Tool call type (present in first chunk)
+	public let type: String?
+	/// Incremental function call data
+	public let function: FunctionCallDelta?
+
+	/// Incremental function call data from a streaming delta.
+	public struct FunctionCallDelta: Codable, Sendable, Equatable {
+		/// Function name (present in first chunk)
+		public let name: String?
+		/// Incremental arguments string
+		public let arguments: String?
+	}
+}
+
+// MARK: - Tool Choice
+
+/// Controls how the model selects tools during generation.
+///
+/// ## Example Usage
+/// ```swift
+/// // Let the model decide
+/// ToolChoiceParam(.auto)
+///
+/// // Force a specific function
+/// ToolChoiceParam(.function("get_weather"))
+///
+/// // Require any tool call
+/// ToolChoiceParam(.required)
+/// ```
+public enum ToolChoice: Sendable, Equatable, Encodable {
+	/// Model decides whether to call a tool
+	case auto
+	/// Model will not call any tools
+	case none
+	/// Model must call at least one tool
+	case required
+	/// Model must call the specified function
+	case function(String)
+
+	public func encode(to encoder: Encoder) throws {
+		switch self {
+		case .auto:
+			var container = encoder.singleValueContainer()
+			try container.encode("auto")
+		case .none:
+			var container = encoder.singleValueContainer()
+			try container.encode("none")
+		case .required:
+			var container = encoder.singleValueContainer()
+			try container.encode("required")
+		case .function(let name):
+			var container = encoder.container(keyedBy: FunctionChoiceKeys.self)
+			try container.encode("function", forKey: .type)
+			try container.encode(["name": name], forKey: .function)
+		}
+	}
+
+	private enum FunctionChoiceKeys: String, CodingKey {
+		case type, function
+	}
+}
+
+/// Configuration parameter that sets the tool choice strategy for a request.
+public struct ToolChoiceParam: ChatConfigParameter {
+	/// The tool choice value
+	public let value: ToolChoice
+
+	/// Creates a tool choice configuration parameter.
+	/// - Parameter value: The tool choice strategy
+	public init(_ value: ToolChoice) {
+		self.value = value
+	}
+
+	public func apply(to request: inout ChatRequest) {
+		request.toolChoice = value
+	}
+}
+
 // MARK: - Tool Support (Future Extension)
 
 /// Defines a tool that the model can call to perform actions or retrieve information.
@@ -910,7 +1098,7 @@ public struct ResourceTimeout: ChatConfigParameter {
 /// ```
 ///
 /// - Note: Tool calling requires appropriate model support and additional handling of tool responses.
-public struct Tool: Codable, Sendable {
+public struct Tool: Sendable, Encodable {
 	/// The type of tool (currently only "function" is supported)
 	public let type: String
 	/// The function definition for this tool
@@ -953,23 +1141,40 @@ public struct Tool: Codable, Sendable {
 	///     ]
 	/// )
 	/// ```
-	public struct Function: Codable, Sendable {
+	public struct Function: Sendable, Encodable {
 		/// The name of the function (must be unique within the tool set)
 		public let name: String
 		/// Human-readable description of what the function does
 		public let description: String
 		/// JSON Schema defining the function's input parameters
-		public let parameters: [String: String]
-		
-		/// Creates a new function definition.
+		public let parameters: JSONSchema
+
+		/// Creates a new function definition with type-safe JSON Schema parameters.
 		/// - Parameters:
 		///   - name: Unique function name
 		///   - description: Clear description of function purpose
 		///   - parameters: JSON Schema for function parameters
-		public init(name: String, description: String, parameters: [String: String]) {
+		public init(name: String, description: String, parameters: JSONSchema) {
 			self.name = name
 			self.description = description
 			self.parameters = parameters
+		}
+
+		/// Creates a new function definition from a legacy string dictionary.
+		/// - Parameters:
+		///   - name: Unique function name
+		///   - description: Clear description of function purpose
+		///   - parameters: Legacy dictionary of parameter names to type strings
+		@available(*, deprecated, message: "Use JSONSchema-based parameters instead")
+		public init(name: String, description: String, parameters: [String: String]) {
+			self.name = name
+			self.description = description
+			// Convert [String: String] to JSONSchema.object with string properties
+			var properties: [String: JSONSchema] = [:]
+			for (key, value) in parameters {
+				properties[key] = .string(description: value)
+			}
+			self.parameters = .object(properties: properties, required: Array(parameters.keys).sorted())
 		}
 	}
 	
@@ -1499,6 +1704,8 @@ public struct ChatRequest: Encodable, Sendable {
 	public var stop: [String]?
 	/// List of tools the model may call
 	public var tools: [Tool]?
+	/// Controls how the model selects tools
+	public var toolChoice: ToolChoice?
 	/// Request timeout for individual HTTP requests (in seconds)
 	public var requestTimeout: TimeInterval?
 	/// Resource timeout for complete resource loading (in seconds)
@@ -1649,18 +1856,19 @@ public struct ChatRequest: Encodable, Sendable {
 		case user
 		case stop
 		case tools
+		case toolChoice = "tool_choice"
 	}
-	
+
 	public func encode(to encoder: Encoder) throws {
 		var container = encoder.container(keyedBy: CodingKeys.self)
 		try container.encode(model, forKey: .model)
-		
+
 		// Encode messages directly using a container
 		var messagesContainer = container.nestedUnkeyedContainer(forKey: .messages)
 		for message in messages {
 			try messagesContainer.encode(AnyEncodableMessage(message))
 		}
-		
+
 		try container.encodeIfPresent(temperature, forKey: .temperature)
 		try container.encodeIfPresent(maxTokens, forKey: .maxTokens)
 		try container.encodeIfPresent(topP, forKey: .topP)
@@ -1672,6 +1880,7 @@ public struct ChatRequest: Encodable, Sendable {
 		try container.encodeIfPresent(user, forKey: .user)
 		try container.encodeIfPresent(stop, forKey: .stop)
 		try container.encodeIfPresent(tools, forKey: .tools)
+		try container.encodeIfPresent(toolChoice, forKey: .toolChoice)
 	}
 }
 
@@ -1911,6 +2120,22 @@ public struct ChatConversation {
 		history.removeAll()
 	}
 
+	/// Adds an assistant message with tool calls to the conversation history.
+	/// - Parameters:
+	///   - content: Optional text content alongside tool calls
+	///   - toolCalls: The tool calls from the model response
+	public mutating func addAssistantToolCalls(content: String?, toolCalls: [ToolCall]) {
+		add(message: AssistantToolCallMessage(content: content, toolCalls: toolCalls))
+	}
+
+	/// Adds a tool result message to the conversation history.
+	/// - Parameters:
+	///   - toolCallId: The ID of the tool call this result corresponds to
+	///   - content: The tool execution result
+	public mutating func addToolResult(toolCallId: String, content: String) {
+		add(message: ToolResultMessage(toolCallId: toolCallId, content: content))
+	}
+
 	/// Generates a ChatRequest using the conversation history plus optional additional messages.
 	///
 	/// This method combines the conversation history with optional additional messages
@@ -1954,6 +2179,62 @@ public struct ChatConversation {
 	}
 }
 
+// MARK: - Tool Message Types
+
+/// Represents an assistant message containing tool calls.
+///
+/// Use this message type when recording the assistant's tool call requests
+/// in conversation history for the tool-calling loop.
+public struct AssistantToolCallMessage: ChatMessage, Sendable {
+	/// The role is always `.assistant`
+	public let role: Role = .assistant
+	/// Optional text content alongside tool calls
+	public let content: String?
+	/// The tool calls requested by the assistant
+	public let toolCalls: [ToolCall]
+
+	/// Creates an assistant tool call message.
+	/// - Parameters:
+	///   - content: Optional text content
+	///   - toolCalls: The tool calls from the model response
+	public init(content: String?, toolCalls: [ToolCall]) {
+		self.content = content
+		self.toolCalls = toolCalls
+	}
+
+	private enum CodingKeys: String, CodingKey {
+		case role, content
+		case toolCalls = "tool_calls"
+	}
+}
+
+/// Represents a tool result message sent back to the model.
+///
+/// After executing a tool call, send the result back using this message type.
+public struct ToolResultMessage: ChatMessage, Sendable {
+	/// The role is always `.tool`
+	public let role: Role = .tool
+	/// The ID of the tool call this result corresponds to
+	public let toolCallId: String
+	/// The result content from the tool execution
+	public let content: String
+
+	/// Creates a tool result message.
+	/// - Parameters:
+	///   - toolCallId: The ID matching the original tool call
+	///   - content: The tool execution result
+	public init(toolCallId: String, content: String) {
+		self.toolCallId = toolCallId
+		self.content = content
+	}
+
+	private enum CodingKeys: String, CodingKey {
+		case role
+		case toolCallId = "tool_call_id"
+		case content
+	}
+}
+
 /// Response structure for non-streaming completions
 public struct ChatResponse: Decodable, Sendable {
 	public let id: String
@@ -1985,12 +2266,27 @@ public struct ChatResponse: Decodable, Sendable {
 	/// Represents a message in the API response.
 	///
 	/// Contains the role (typically "assistant") and the text content
-	/// generated by the model.
+	/// generated by the model. When the model returns tool calls, `content`
+	/// may be null in the API response; it decodes as `""` for source compatibility.
 	public struct Message: Decodable, Sendable {
 		/// The role of the message sender (typically "assistant" for responses)
 		public let role: Role
-		/// The text content of the message
+		/// The text content of the message (null from API decodes as empty string)
 		public let content: String
+		/// Tool calls requested by the model, if any
+		public let toolCalls: [ToolCall]?
+
+		private enum CodingKeys: String, CodingKey {
+			case role, content
+			case toolCalls = "tool_calls"
+		}
+
+		public init(from decoder: Decoder) throws {
+			let container = try decoder.container(keyedBy: CodingKeys.self)
+			role = try container.decode(Role.self, forKey: .role)
+			content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+			toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
+		}
 	}
 
 	/// Token usage statistics for the API request.
@@ -2056,6 +2352,13 @@ public struct ChatDelta: Decodable, Sendable {
 			public let content: String?
 			/// The role of the message (typically only present in the first delta)
 			public let role: Role?
+			/// Incremental tool call data, if any
+			public let toolCalls: [ToolCallDelta]?
+
+			private enum CodingKeys: String, CodingKey {
+				case content, role
+				case toolCalls = "tool_calls"
+			}
 		}
 	}
 }
@@ -2077,6 +2380,16 @@ extension ChatResponse {
 	public var totalTokens: Int {
 		usage?.totalTokens ?? 0
 	}
+
+	/// Returns the tool calls from the first choice, or nil if none.
+	public var firstToolCalls: [ToolCall]? {
+		choices.first?.message.toolCalls
+	}
+
+	/// Whether this response requires tool execution (model returned tool calls).
+	public var requiresToolExecution: Bool {
+		firstFinishReason == "tool_calls" || (firstToolCalls?.isEmpty == false)
+	}
 }
 
 extension ChatDelta {
@@ -2088,6 +2401,11 @@ extension ChatDelta {
 	/// Returns the first choice's finish reason, or nil if not finished.
 	public var firstFinishReason: String? {
 		choices.first?.finishReason
+	}
+
+	/// Returns the tool call deltas from the first choice, or nil if none.
+	public var firstToolCallDeltas: [ToolCallDelta]? {
+		choices.first?.delta.toolCalls
 	}
 }
 
@@ -2209,7 +2527,6 @@ extension ChatDelta {
 /// - Custom API implementations
 ///
 /// The client handles authentication via Bearer token and expects standard JSON responses.
-@available(macOS 12.0, iOS 15.0, *)
 public actor LLMClient {
 	/// The base URL for the chat completions endpoint
 	private let baseURL: String
@@ -2651,5 +2968,455 @@ public actor LLMClient {
 				}
 			}
 		}
+	}
+}
+
+// MARK: - Tool Session
+
+/// Log entry for a single tool call execution within a ToolSession.
+public struct ToolCallLogEntry: Sendable {
+	/// The name of the tool that was called
+	public let name: String
+	/// The raw JSON arguments passed to the tool
+	public let arguments: String
+	/// The result returned by the tool handler
+	public let result: String
+	/// How long the tool execution took
+	public let duration: Duration
+}
+
+/// Result of a ToolSession run, containing the final response and execution details.
+public struct ToolSessionResult: Sendable {
+	/// The final chat response (after all tool-calling iterations)
+	public let response: ChatResponse
+	/// All messages exchanged during the session (including tool calls and results)
+	public let messages: [any ChatMessage]
+	/// Number of tool-calling iterations performed
+	public let iterations: Int
+	/// Log of all tool call executions
+	public let log: [ToolCallLogEntry]
+}
+
+/// Orchestrates the tool-calling loop: send → parse tool_calls → execute → results → repeat.
+///
+/// `ToolSession` manages the iterative process of sending requests to an LLM,
+/// receiving tool call requests, executing the corresponding handlers, and
+/// sending results back until the model produces a final text response.
+///
+/// ## Example Usage
+/// ```swift
+/// let session = ToolSession(
+///     client: client,
+///     tools: [weatherTool],
+///     handlers: ["get_weather": { args in
+///         return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+///     }]
+/// )
+///
+/// let result = try await session.run(
+///     model: "gpt-4",
+///     messages: [TextMessage(role: .user, content: "What's the weather in Paris?")]
+/// )
+/// print(result.response.firstContent ?? "")
+/// ```
+public struct ToolSession: Sendable {
+	/// Closure type for tool handlers: takes raw JSON arguments, returns result string.
+	public typealias ToolHandler = @Sendable (String) async throws -> String
+
+	private let client: LLMClient
+	private let tools: [Tool]
+	private let toolChoice: ToolChoice?
+	private let handlers: [String: ToolHandler]
+	private let maxIterations: Int
+
+	/// Creates a new ToolSession.
+	/// - Parameters:
+	///   - client: The LLM client to use for API calls
+	///   - tools: Tool definitions to provide to the model
+	///   - toolChoice: Optional tool choice strategy
+	///   - maxIterations: Maximum number of tool-calling iterations (default: 10)
+	///   - handlers: Dictionary mapping tool names to their handler closures
+	public init(
+		client: LLMClient,
+		tools: [Tool],
+		toolChoice: ToolChoice? = nil,
+		maxIterations: Int = 10,
+		handlers: [String: ToolHandler]
+	) {
+		self.client = client
+		self.tools = tools
+		self.toolChoice = toolChoice
+		self.maxIterations = maxIterations
+		self.handlers = handlers
+	}
+
+	/// Runs the tool-calling loop until the model produces a final response.
+	/// - Parameters:
+	///   - model: The model identifier
+	///   - messages: Initial messages for the conversation
+	///   - config: Optional configuration parameters
+	/// - Returns: The final result including response, messages, and execution log
+	/// - Throws: `LLMError.maxIterationsExceeded` if the loop doesn't converge,
+	///           `LLMError.unknownTool` if model calls an unregistered tool,
+	///           or any error from the LLM client
+	public func run(
+		model: String,
+		messages: [any ChatMessage],
+		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] }
+	) async throws -> ToolSessionResult {
+		try await run(model: model, messages: messages, configParams: config())
+	}
+
+	/// Runs the tool-calling loop with pre-computed configuration parameters.
+	public func run(
+		model: String,
+		messages: [any ChatMessage],
+		configParams: [ChatConfigParameter]
+	) async throws -> ToolSessionResult {
+		var currentMessages = messages
+		var allLog: [ToolCallLogEntry] = []
+		var iterations = 0
+
+		while iterations < maxIterations {
+			// Build request with tools
+			var request = try ChatRequest(model: model, messages: currentMessages)
+			request.tools = tools
+			request.toolChoice = toolChoice
+			for param in configParams {
+				param.apply(to: &request)
+			}
+
+			let response = try await client.complete(request)
+
+			guard response.requiresToolExecution,
+				  let toolCalls = response.firstToolCalls, !toolCalls.isEmpty else {
+				// No tool calls — final response
+				return ToolSessionResult(
+					response: response,
+					messages: currentMessages,
+					iterations: iterations,
+					log: allLog
+				)
+			}
+
+			// Record assistant's tool call message
+			let assistantContent = response.firstContent
+			currentMessages.append(
+				AssistantToolCallMessage(
+					content: assistantContent?.isEmpty == true ? nil : assistantContent,
+					toolCalls: toolCalls
+				)
+			)
+
+			// Execute all tool handlers in parallel
+			let results = try await withThrowingTaskGroup(
+				of: (Int, String, ToolCallLogEntry).self
+			) { group in
+				for (index, toolCall) in toolCalls.enumerated() {
+					let handlerName = toolCall.function.name
+					guard let handler = handlers[handlerName] else {
+						throw LLMError.unknownTool(handlerName)
+					}
+
+					group.addTask {
+						let clock = ContinuousClock()
+						let start = clock.now
+						do {
+							let result = try await handler(toolCall.function.arguments)
+							let duration = clock.now - start
+							let logEntry = ToolCallLogEntry(
+								name: handlerName,
+								arguments: toolCall.function.arguments,
+								result: result,
+								duration: duration
+							)
+							return (index, result, logEntry)
+						} catch {
+							throw LLMError.toolExecutionFailed(
+								toolName: handlerName,
+								message: "\(error)"
+							)
+						}
+					}
+				}
+
+				var collected: [(Int, String, ToolCallLogEntry)] = []
+				for try await result in group {
+					collected.append(result)
+				}
+				return collected.sorted { $0.0 < $1.0 }
+			}
+
+			// Append tool result messages in order
+			for (index, result, logEntry) in results {
+				allLog.append(logEntry)
+				currentMessages.append(
+					ToolResultMessage(
+						toolCallId: toolCalls[index].id,
+						content: result
+					)
+				)
+			}
+
+			iterations += 1
+		}
+
+		throw LLMError.maxIterationsExceeded(maxIterations)
+	}
+}
+
+// MARK: - Agent
+
+/// Structured log entry for Agent debugging and observability.
+public enum TranscriptEntry: Sendable {
+	/// A user message was sent
+	case userMessage(String)
+	/// The assistant produced a text response
+	case assistantMessage(String)
+	/// The assistant requested a tool call
+	case toolCall(name: String, arguments: String)
+	/// A tool returned a result
+	case toolResult(name: String, result: String, duration: Duration)
+	/// An error occurred
+	case error(String)
+}
+
+/// Pairs a Tool definition with its handler closure for use with Agent.
+public struct AgentTool: Sendable {
+	/// The tool definition
+	public let tool: Tool
+	/// The handler closure that executes the tool
+	public let handler: ToolSession.ToolHandler
+
+	/// Creates an AgentTool.
+	/// - Parameters:
+	///   - tool: The tool definition
+	///   - handler: The handler closure
+	public init(tool: Tool, handler: @escaping ToolSession.ToolHandler) {
+		self.tool = tool
+		self.handler = handler
+	}
+}
+
+/// Result builder for declaratively registering tools with an Agent.
+///
+/// ## Example Usage
+/// ```swift
+/// let agent = try Agent(client: client, model: "gpt-4") {
+///     AgentTool(tool: weatherTool) { args in
+///         return "{\"temperature\": 72}"
+///     }
+///     AgentTool(tool: calculatorTool) { args in
+///         return "42"
+///     }
+/// }
+/// ```
+@resultBuilder
+public struct AgentToolBuilder {
+	public static func buildBlock(_ components: AgentTool...) -> [AgentTool] {
+		Array(components)
+	}
+
+	public static func buildEither(first: [AgentTool]) -> [AgentTool] {
+		first
+	}
+
+	public static func buildEither(second: [AgentTool]) -> [AgentTool] {
+		second
+	}
+
+	public static func buildOptional(_ component: [AgentTool]?) -> [AgentTool] {
+		component ?? []
+	}
+
+	public static func buildArray(_ components: [[AgentTool]]) -> [AgentTool] {
+		components.flatMap { $0 }
+	}
+}
+
+/// High-level persistent agent with conversation history and tool execution.
+///
+/// `Agent` manages a multi-turn conversation with an LLM, automatically handling
+/// tool calls via `ToolSession`. It maintains conversation history and a debugging
+/// transcript for observability.
+///
+/// ## Example Usage
+/// ```swift
+/// let agent = try Agent(client: client, model: "gpt-4", systemPrompt: "You are helpful.") {
+///     AgentTool(tool: weatherTool) { args in
+///         return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+///     }
+/// }
+///
+/// let response = try await agent.send("What's the weather in Paris?")
+/// print(response)
+/// ```
+public actor Agent {
+	private let client: LLMClient
+	private let model: String
+	private var conversation: ChatConversation
+	private let tools: [Tool]
+	private let toolChoice: ToolChoice?
+	private let toolHandlers: [String: ToolSession.ToolHandler]
+	private let configParams: [ChatConfigParameter]
+	private let maxToolIterations: Int
+	private var _transcript: [TranscriptEntry] = []
+
+	/// The full conversation history.
+	public var history: [any ChatMessage] {
+		conversation.history
+	}
+
+	/// The debugging transcript of all agent activity.
+	public var transcript: [TranscriptEntry] {
+		_transcript
+	}
+
+	/// Creates a new Agent with explicit tool definitions and handlers.
+	/// - Parameters:
+	///   - client: The LLM client to use
+	///   - model: The model identifier
+	///   - systemPrompt: Optional system prompt
+	///   - tools: Tool definitions
+	///   - toolChoice: Optional tool choice strategy
+	///   - toolHandlers: Dictionary mapping tool names to handlers
+	///   - config: Configuration parameters
+	///   - maxToolIterations: Maximum tool-calling loop iterations (default: 10)
+	public init(
+		client: LLMClient,
+		model: String,
+		systemPrompt: String? = nil,
+		tools: [Tool] = [],
+		toolChoice: ToolChoice? = nil,
+		toolHandlers: [String: ToolSession.ToolHandler] = [:],
+		config: [ChatConfigParameter] = [],
+		maxToolIterations: Int = 10
+	) {
+		self.client = client
+		self.model = model
+		self.tools = tools
+		self.toolChoice = toolChoice
+		self.toolHandlers = toolHandlers
+		self.configParams = config
+		self.maxToolIterations = maxToolIterations
+
+		if let systemPrompt {
+			self.conversation = ChatConversation {
+				TextMessage(role: .system, content: systemPrompt)
+			}
+		} else {
+			self.conversation = ChatConversation()
+		}
+	}
+
+	/// Creates a new Agent using the builder pattern for tools.
+	/// - Parameters:
+	///   - client: The LLM client to use
+	///   - model: The model identifier
+	///   - systemPrompt: Optional system prompt
+	///   - maxToolIterations: Maximum tool-calling loop iterations (default: 10)
+	///   - config: Configuration parameters using ChatConfigBuilder
+	///   - tools: Tools using AgentToolBuilder
+	public init(
+		client: LLMClient,
+		model: String,
+		systemPrompt: String? = nil,
+		maxToolIterations: Int = 10,
+		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+		@AgentToolBuilder tools: () -> [AgentTool]
+	) throws {
+		let agentTools = tools()
+		let toolDefs = agentTools.map(\.tool)
+		var handlers: [String: ToolSession.ToolHandler] = [:]
+		for agentTool in agentTools {
+			handlers[agentTool.tool.function.name] = agentTool.handler
+		}
+
+		self.client = client
+		self.model = model
+		self.tools = toolDefs
+		self.toolChoice = nil
+		self.toolHandlers = handlers
+		self.configParams = try config()
+		self.maxToolIterations = maxToolIterations
+
+		if let systemPrompt {
+			self.conversation = ChatConversation {
+				TextMessage(role: .system, content: systemPrompt)
+			}
+		} else {
+			self.conversation = ChatConversation()
+		}
+	}
+
+	/// Sends a user message and returns the assistant's response.
+	///
+	/// If the model requests tool calls, they are automatically executed
+	/// and the results are sent back until a final text response is produced.
+	///
+	/// - Parameter message: The user's message text
+	/// - Returns: The assistant's text response
+	/// - Throws: `LLMError` for API or tool execution failures
+	public func send(_ message: String) async throws -> String {
+		conversation.addUser(content: message)
+		_transcript.append(.userMessage(message))
+
+		if tools.isEmpty {
+			// No tools — simple completion
+			var request = try ChatRequest(model: model, messages: conversation.history)
+			for param in configParams {
+				param.apply(to: &request)
+			}
+
+			let response = try await client.complete(request)
+			let content = response.firstContent ?? ""
+			conversation.addAssistant(content: content)
+			_transcript.append(.assistantMessage(content))
+			return content
+		}
+
+		// Use ToolSession for tool-calling loop
+		let session = ToolSession(
+			client: client,
+			tools: tools,
+			toolChoice: toolChoice,
+			maxIterations: maxToolIterations,
+			handlers: toolHandlers
+		)
+
+		// Copy to local to cross isolation boundary
+		let configCopy = configParams
+		let messagesCopy = conversation.history
+		let result = try await session.run(
+			model: model,
+			messages: messagesCopy,
+			configParams: configCopy
+		)
+
+		// Record tool activity in transcript
+		for entry in result.log {
+			_transcript.append(.toolCall(name: entry.name, arguments: entry.arguments))
+			_transcript.append(.toolResult(name: entry.name, result: entry.result, duration: entry.duration))
+		}
+
+		// Update conversation with all messages from the session
+		// Replace history from the point where we started
+		let originalCount = conversation.history.count
+		let newMessages = result.messages.dropFirst(originalCount)
+		for msg in newMessages {
+			conversation.add(message: msg)
+		}
+
+		// Add final assistant response
+		let content = result.response.firstContent ?? ""
+		conversation.addAssistant(content: content)
+		_transcript.append(.assistantMessage(content))
+		return content
+	}
+
+	/// Resets the agent's conversation history and transcript.
+	public func reset() {
+		conversation.clear()
+		_transcript.removeAll()
 	}
 }
