@@ -203,12 +203,18 @@ Sources/SwiftChatCompletionsDSLMacros/
 Tests/SwiftChatCompletionsDSLTests/
 ├── SwiftChatCompletionsDSLTests.swift      # All test cases (120 tests)
 Spec/
-├── SwiftChatCompletionsDSL.md              # Core specification
-├── ToolCalling.md                           # Tool calling type specification
+├── SwiftChatCompletionsDSL.md              # Core public API specification
+├── SwiftChatCompletionsDSL-HOW.md          # Core implementation details
+├── ToolCalling.md                           # Tool calling public API specification
+├── ToolCalling-HOW.md                       # Tool calling implementation details
 ├── ToolSupportSpec.md                       # Tool support public API specification
+├── ToolSupportSpec-HOW.md                   # Tool support implementation details
 ├── DocumentationSpec.md                     # Documentation requirements
 Examples/
 ├── BasicUsage.swift                         # Usage examples
+.claude/skills/
+├── using-swift-chat-completions-macros/     # Macro usage skill for AI assistants
+│   └── SKILL.md
 ```
 
 The project follows Swift Package Manager conventions with core types in the main source file and tool orchestration (ToolSession, Agent) in separate files, plus a macros bridge target for SwiftChatCompletionsMacros integration.

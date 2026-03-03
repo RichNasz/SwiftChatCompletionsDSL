@@ -122,10 +122,10 @@ import SwiftChatCompletionsMacros
 
 @ChatCompletionsToolArguments
 struct WeatherArgs {
-    @ChatCompletionsToolGuide("City and state, e.g. Alpharetta, GA")
+    @ChatCompletionsToolGuide(description: "City and state, e.g. Alpharetta, GA")
     var location: String
 
-    @ChatCompletionsToolGuide("Temperature unit", .anyOf(["celsius", "fahrenheit"]))
+    @ChatCompletionsToolGuide(description: "Temperature unit", .anyOf(["celsius", "fahrenheit"]))
     var unit: String?
 }
 
@@ -153,8 +153,6 @@ let agentTool = AgentTool(GetWeather())
 | Tool name | Hand-write string | Auto-derived from type name |
 | Description | Hand-write string | Extracted from doc comment |
 | Lines of code | ~15 per tool | ~8 per tool |
-
-> **Note**: Future rename to `@ChatCompletionsTool` family planned for Apple FoundationModels compatibility.
 
 ### Inline Tools with Result Builder
 
