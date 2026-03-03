@@ -776,10 +776,6 @@ public struct UserID: ChatConfigParameter {
 	}
 }
 
-/// Backward-compatible alias for ``UserID``.
-@available(*, deprecated, renamed: "UserID")
-public typealias UserIdentifier = UserID
-
 /// Defines up to 4 sequences where the API will stop generating further tokens.
 ///
 /// Stop sequences allow you to control exactly where the model stops generating text.
@@ -1265,29 +1261,6 @@ public struct ToolChoiceParam: ChatConfigParameter {
 /// )
 /// ```
 public typealias Tool = ToolDefinition
-
-extension ToolDefinition {
-	/// The tool type, always "function" for OpenAI-compatible tool definitions.
-	public var type: String { "function" }
-
-	/// Creates a tool from a legacy string-keyed parameters dictionary.
-	/// - Parameters:
-	///   - name: Unique tool name
-	///   - description: Clear description of what the tool does
-	///   - parameters: Legacy dictionary mapping parameter names to descriptions
-	@available(*, deprecated, message: "Use JSONSchema-based parameters instead")
-	public init(name: String, description: String, parameters: [String: String]) {
-		var properties: [String: JSONSchemaValue] = [:]
-		for (key, value) in parameters {
-			properties[key] = .string(description: value)
-		}
-		self.init(
-			name: name,
-			description: description,
-			parameters: .object(properties: properties, required: Array(parameters.keys).sorted())
-		)
-	}
-}
 
 /// Configuration parameter that provides an array of tools the model can call during conversation.
 ///

@@ -4,8 +4,6 @@
 
 This specification defines the tool calling and agent orchestration types for SwiftChatCompletionsDSL. These additions enable the DSL to parse tool_calls from API responses, manage the tool-calling loop, and provide a high-level agent abstraction for persistent conversations with tool use.
 
-## New Types
-
 ### JSONSchema (indirect enum)
 Type-safe JSON Schema representation replacing `[String: String]` for tool parameters.
 
@@ -19,7 +17,7 @@ Parsed tool call from a non-streaming API response.
 
 - **Fields**: `id: String`, `type: String`, `function: FunctionCall`
 - **FunctionCall**: `name: String`, `arguments: String` (raw JSON)
-- **Public inits**: Both `ToolCall` and `FunctionCall` have explicit public initializers
+- **Public inits**: Both `ToolCall` and `FunctionCall` have explicit public initializers. `ToolCall.init` has `type: String = "function"` default.
 - **Conformance**: `Codable`, `Sendable`
 - **decodeArguments()**: Generic helper to decode raw JSON arguments into typed Swift values:
   ```swift
@@ -78,21 +76,18 @@ Declarative syntax for configuring sessions with both messages and tools.
 
 - **buildExpression**: Accepts `TextMessage`, `any ChatMessage`, or `AgentTool`
 - **Control flow**: `buildEither`, `buildOptional`, `buildArray` for conditionals and loops
-- **Location**: `ToolSession.swift`
 
 ### ToolSession (struct)
 Orchestrates the tool-calling loop: send → parse tool_calls → execute handlers → send results → repeat.
 
 - **ToolHandler**: `@Sendable (String) async throws -> String`
-- **Explicit init**: `client`, `tools`, `toolChoice`, `maxIterations`, `handlers`
-- **Declarative init**: `client`, `model`, `toolChoice`, `maxIterations`, `@SessionBuilder configure`
-  - Parses `SessionComponent` array into messages, tools, and handlers
-  - Stores `model` and `initialMessages` for use with `run(_ prompt:)`
-- **Duplicate detection**: `precondition` fails if two tools share the same name (both inits)
-- **run(model:messages:config:)**: Accepts model, messages, config; returns `ToolSessionResult`
-- **run(_ prompt:)**: Shorthand for declarative init — appends user message to initial messages and runs with stored model. Precondition failure if not created with declarative init.
-- **Loop logic**: Parallel tool execution via `withThrowingTaskGroup`
-- **Error context**: `toolExecutionFailed` message includes error type name: `"[\(type(of: error))] \(error.localizedDescription)"`
+- **Explicit init**: `client: LLMClient`, `tools: [Tool]`, `toolChoice: ToolChoice? = nil`, `maxIterations: Int = 10`, `handlers: [String: ToolHandler]`
+- **Declarative init**: `client: LLMClient`, `model: String`, `toolChoice: ToolChoice? = nil`, `maxIterations: Int = 10`, `@SessionBuilder configure: () -> [SessionComponent]`
+- **Duplicate detection**: Both inits use `precondition` (crashes on duplicate tool names)
+- **run(model:messages:config:)**: Accepts model, messages, `@ChatConfigBuilder` config block; returns `ToolSessionResult`
+- **run(model:messages:configParams:)**: Accepts model, messages, `[ChatConfigParameter]` directly (not a builder); returns `ToolSessionResult`. This overload is what `Agent.send()` calls internally.
+- **run(_ prompt:)**: Shorthand for declarative init — appends user message to initial messages and runs with stored model; returns `ToolSessionResult`. Precondition failure if called on explicit init (no model stored).
+- **Error**: Handler errors are wrapped as `LLMError.toolExecutionFailed(toolName:message:)`
 
 ### ToolSessionResult (struct)
 Result of a ToolSession run.
@@ -107,18 +102,16 @@ Log entry for a single tool call execution.
 ### Agent (actor)
 High-level persistent agent with conversation history, parallel tool execution, and transcript.
 
-- **Explicit init**: client, model, systemPrompt, tools, toolChoice, toolHandlers, config, maxToolIterations
-  - `precondition` fails on duplicate tool names
-- **Builder init**: Uses `@AgentToolBuilder` for declarative tool registration
-  - Throws `LLMError.invalidValue("Duplicate tool name: '\(name)'")`  on duplicate tool names
-- **Declarative init**: Uses `@SessionBuilder` for mixed messages+tools configuration
-  - `init(client:model:maxToolIterations:configure:) throws`
-  - Extracts system messages and tools from `SessionComponent` array
-  - First system message becomes the system prompt
+- **Explicit init**: `client: LLMClient`, `model: String`, `systemPrompt: String? = nil`, `tools: [Tool] = []`, `toolChoice: ToolChoice? = nil`, `toolHandlers: [String: ToolSession.ToolHandler] = [:]`, `config: [ChatConfigParameter] = []`, `maxToolIterations: Int = 10`
+  - Uses `precondition` for duplicate tool name detection (crashes)
+- **Builder init**: `client: LLMClient`, `model: String`, `systemPrompt: String? = nil`, `maxToolIterations: Int = 10`, `@ChatConfigBuilder config:`, `@AgentToolBuilder tools:`
+  - `toolChoice` is always `nil` in this init
   - Throws `LLMError.invalidValue` on duplicate tool names
-- **Methods**: `send(_:)`, `run(_:)` (alias for `send`), `reset()`
-- **Properties**: `history`, `transcript`, `registeredToolNames: [String]`, `toolCount: Int`
-- Uses `ToolSession` internally
+- **Declarative init**: `client: LLMClient`, `model: String`, `maxToolIterations: Int = 10`, `@SessionBuilder configure:`
+  - `toolChoice` is always `nil`, `configParams` = empty
+  - Throws `LLMError.invalidValue` on duplicate tool names
+- **Methods**: `send(_:) -> String`, `run(_:) -> String` (alias for `send`), `reset()`
+- **Properties**: `history: [any ChatMessage]`, `transcript: [TranscriptEntry]`, `registeredToolNames: [String]`, `toolCount: Int`
 
 ### TranscriptEntry (enum)
 Structured log entries for Agent debugging.
@@ -133,7 +126,13 @@ Pairs a `Tool` definition with its handler closure.
 ### AgentToolBuilder (result builder)
 Declarative syntax for registering tools with Agent.
 
+For implementation details, see [ToolCalling-HOW.md](ToolCalling-HOW.md).
+
+---
+
 ## Modified Types
+
+The table below documents what was added to existing types for tool calling support. Complete type definitions (including these tool fields) now live in [SwiftChatCompletionsDSL.md](SwiftChatCompletionsDSL.md). This table is retained as a change log for understanding what was added and why.
 
 | Type | Change |
 |------|--------|
@@ -152,7 +151,7 @@ Declarative syntax for registering tools with Agent.
 - `ChatResponse.Message.content` stays `String` type; null decodes as `""`
 - All new fields are optional/additive
 - New `LLMError` cases work with existing `default` switches
-- `User` config struct renamed to `UserID`; deprecated `UserIdentifier` typealias provided
+- `User` config struct renamed to `UserID`
 - `User()` convenience function added for creating user messages (replaces `UserMessage()` as preferred shorthand)
 - All existing inits for `ToolSession` and `Agent` remain unchanged; new declarative inits are additive
 - `Agent.run(_:)` is an additive alias for `send(_:)`

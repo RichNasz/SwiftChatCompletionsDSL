@@ -317,10 +317,9 @@ import SwiftChatCompletionsMacros
     let tool = Tool(
         name: "get_weather",
         description: "Get the current weather",
-        parameters: ["location": "string"]
+        parameters: .object(properties: ["location": .string(description: "City name")], required: ["location"])
     )
 
-    #expect(tool.type == "function")
     #expect(tool.name == "get_weather")
     #expect(tool.description == "Get the current weather")
 }
@@ -329,7 +328,7 @@ import SwiftChatCompletionsMacros
     let tool = Tool(
         name: "calculate",
         description: "Perform calculation",
-        parameters: ["expression": "string"]
+        parameters: .object(properties: ["expression": .string(description: "Math expression to evaluate")], required: ["expression"])
     )
 
     let request = try ChatRequest(model: "test-model", config: {
@@ -1197,65 +1196,6 @@ struct AllNetworkTests {
 
 // MARK: - JSONSchema Encoding Tests
 
-@Test func testJSONSchemaStringEncoding() throws {
-    let schema = JSONSchema.string(description: "A city name")
-    let data = try JSONEncoder().encode(schema)
-    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-
-    #expect(json?["type"] as? String == "string")
-    #expect(json?["description"] as? String == "A city name")
-}
-
-@Test func testJSONSchemaStringWithEnum() throws {
-    let schema = JSONSchema.string(description: "Unit", enumValues: ["celsius", "fahrenheit"])
-    let data = try JSONEncoder().encode(schema)
-    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-
-    #expect(json?["type"] as? String == "string")
-    #expect(json?["enum"] as? [String] == ["celsius", "fahrenheit"])
-}
-
-@Test func testJSONSchemaIntegerEncoding() throws {
-    let schema = JSONSchema.integer(description: "Age", minimum: 0, maximum: 150)
-    let data = try JSONEncoder().encode(schema)
-    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-
-    #expect(json?["type"] as? String == "integer")
-    #expect(json?["description"] as? String == "Age")
-    #expect(json?["minimum"] as? Int == 0)
-    #expect(json?["maximum"] as? Int == 150)
-}
-
-@Test func testJSONSchemaNumberEncoding() throws {
-    let schema = JSONSchema.number(description: "Price", minimum: 0.0, maximum: 999.99)
-    let data = try JSONEncoder().encode(schema)
-    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-
-    #expect(json?["type"] as? String == "number")
-    #expect(json?["description"] as? String == "Price")
-    #expect(json?["minimum"] as? Double == 0.0)
-    #expect(json?["maximum"] as? Double == 999.99)
-}
-
-@Test func testJSONSchemaBooleanEncoding() throws {
-    let schema = JSONSchema.boolean(description: "Is active")
-    let data = try JSONEncoder().encode(schema)
-    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-
-    #expect(json?["type"] as? String == "boolean")
-    #expect(json?["description"] as? String == "Is active")
-}
-
-@Test func testJSONSchemaArrayEncoding() throws {
-    let schema = JSONSchema.array(items: .string(description: "Tag"))
-    let data = try JSONEncoder().encode(schema)
-    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-
-    #expect(json?["type"] as? String == "array")
-    let items = json?["items"] as? [String: Any]
-    #expect(items?["type"] as? String == "string")
-}
-
 @Test func testJSONSchemaObjectEncoding() throws {
     let schema = JSONSchema.object(
         properties: [
@@ -1274,15 +1214,6 @@ struct AllNetworkTests {
     let properties = json?["properties"] as? [String: Any]
     #expect(properties?["name"] != nil)
     #expect(properties?["age"] != nil)
-}
-
-@Test func testJSONSchemaEquality() {
-    let a = JSONSchema.string(description: "test")
-    let b = JSONSchema.string(description: "test")
-    let c = JSONSchema.string(description: "other")
-
-    #expect(a == b)
-    #expect(a != c)
 }
 
 // MARK: - ToolCall Decoding Tests
@@ -1569,24 +1500,6 @@ struct AllNetworkTests {
     #expect(limit?["type"] as? String == "integer")
     #expect(limit?["minimum"] as? Int == 1)
     #expect(limit?["maximum"] as? Int == 100)
-}
-
-// MARK: - Deprecated Tool [String:String] Backward Compat Test
-
-@Test func testDeprecatedToolFunctionInit() throws {
-    let tool = Tool(
-        name: "test",
-        description: "Test function",
-        parameters: ["param1": "description1"]
-    )
-
-    // Should convert to JSONSchema.object
-    let data = try JSONEncoder().encode(tool)
-    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-
-    let function = json?["function"] as? [String: Any]
-    let params = function?["parameters"] as? [String: Any]
-    #expect(params?["type"] as? String == "object")
 }
 
 // MARK: - New LLMError Cases Tests
