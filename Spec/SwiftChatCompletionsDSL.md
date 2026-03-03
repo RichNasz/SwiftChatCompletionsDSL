@@ -119,10 +119,11 @@ For tool calling and agent capabilities, see [ToolCalling.md](ToolCalling.md) an
     - Signature: `struct LogitBias: ChatConfigParameter { let value: [String: Int]; init(_ value: [String: Int]); func apply(to request: inout ChatRequest) }`
     - Validation: None (assumes valid dictionary).
     - Applies: Sets `request.logitBias = value`.
-  - **User**:
-    - Signature: `struct User: ChatConfigParameter { let value: String; init(_ value: String) throws; func apply(to request: inout ChatRequest) }`
+  - **UserID** (formerly `User`):
+    - Signature: `struct UserID: ChatConfigParameter { let value: String; init(_ value: String) throws; func apply(to request: inout ChatRequest) }`
     - Validation: Throws `LLMError.invalidValue(String)` if `value` is empty.
     - Applies: Sets `request.user = value`.
+    - Note: Renamed from `User` to avoid conflict with the `User()` convenience message function. Deprecated typealias `UserIdentifier = UserID` provided for backward compatibility.
   - **Stop** (additional param):
     - Signature: `struct Stop: ChatConfigParameter { let value: [String]; init(_ value: [String]) throws; func apply(to request: inout ChatRequest) }`
     - Validation: Throws `LLMError.invalidValue(String)` if array is empty or contains invalid strings.
@@ -173,6 +174,26 @@ For tool calling and agent capabilities, see [ToolCalling.md](ToolCalling.md) an
             model: String,
             stream: Bool = false,
             @ChatConfigBuilder config: () -> [ChatConfigParameter] = { [] },
+            messages: [any ChatMessage]
+        ) throws
+
+        // With inline tools builder
+        init(
+            model: String,
+            stream: Bool = false,
+            toolChoice: ToolChoice? = nil,
+            @ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+            @ToolsBuilder tools: () -> [Tool],
+            @ChatBuilder messages: () -> [any ChatMessage]
+        ) throws
+
+        // With inline tools builder and array messages
+        init(
+            model: String,
+            stream: Bool = false,
+            toolChoice: ToolChoice? = nil,
+            @ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+            @ToolsBuilder tools: () -> [Tool],
             messages: [any ChatMessage]
         ) throws
     }
@@ -334,6 +355,38 @@ For tool calling and agent capabilities, see [ToolCalling.md](ToolCalling.md) an
     ```
   - Purpose: Enables declarative configuration blocks with control flow.
 
+- **ToolsBuilder**: Composes inline tool declarations for ChatRequest.
+  - Signature:
+    ```swift
+    @resultBuilder
+    struct ToolsBuilder {
+        static func buildBlock(_ components: Tool...) -> [Tool]
+        static func buildEither(first: [Tool]) -> [Tool]
+        static func buildEither(second: [Tool]) -> [Tool]
+        static func buildOptional(_ component: [Tool]?) -> [Tool]
+        static func buildArray(_ components: [[Tool]]) -> [Tool]
+    }
+    ```
+  - Purpose: Enables declarative inline tool declarations in `ChatRequest` initializers via a `tools:` parameter, supporting conditionals and loops.
+
+- **SessionBuilder**: Composes mixed messages and tools for declarative ToolSession/Agent configuration.
+  - Signature:
+    ```swift
+    @resultBuilder
+    struct SessionBuilder {
+        static func buildExpression(_ message: TextMessage) -> [SessionComponent]
+        static func buildExpression(_ message: any ChatMessage) -> [SessionComponent]
+        static func buildExpression(_ tool: AgentTool) -> [SessionComponent]
+        static func buildBlock(_ components: [SessionComponent]...) -> [SessionComponent]
+        static func buildEither(first: [SessionComponent]) -> [SessionComponent]
+        static func buildEither(second: [SessionComponent]) -> [SessionComponent]
+        static func buildOptional(_ component: [SessionComponent]?) -> [SessionComponent]
+        static func buildArray(_ components: [[SessionComponent]]) -> [SessionComponent]
+    }
+    ```
+  - Purpose: Enables Apple FoundationModels-style declarative configuration where both messages (e.g., `System("...")`) and tools (`AgentTool(...)`) can be mixed in a single builder block. Uses `SessionComponent` enum as the intermediate type.
+  - Related type: `SessionComponent` enum with cases `.message(any ChatMessage)` and `.agentTool(AgentTool)`.
+
 ### 6. Actor: LLMClient
 - Signature:
   ```swift
@@ -381,7 +434,7 @@ For tool calling and agent capabilities, see [ToolCalling.md](ToolCalling.md) an
        try ChatRequest(model: "gpt-4o", stream: true) {
            Temperature(0.8)
            MaxTokens(200)
-           User("user123")
+           UserID("user123")
        } messages: {
            TextMessage(role: .user, content: "Write a poem."),
        }

@@ -67,13 +67,30 @@ Controls model tool selection behavior.
 - **Fields**: `role: Role = .tool`, `toolCallId: String`, `content: String`
 - **JSON keys**: `tool_call_id` for snake_case serialization
 
+### SessionComponent (enum)
+A component that can appear inside a `@SessionBuilder` block. Allows mixing messages and tools in a single builder.
+
+- **Cases**: `.message(any ChatMessage)`, `.agentTool(AgentTool)`
+- **Conformance**: `Sendable`
+
+### SessionBuilder (result builder)
+Declarative syntax for configuring sessions with both messages and tools.
+
+- **buildExpression**: Accepts `TextMessage`, `any ChatMessage`, or `AgentTool`
+- **Control flow**: `buildEither`, `buildOptional`, `buildArray` for conditionals and loops
+- **Location**: `ToolSession.swift`
+
 ### ToolSession (struct)
 Orchestrates the tool-calling loop: send → parse tool_calls → execute handlers → send results → repeat.
 
 - **ToolHandler**: `@Sendable (String) async throws -> String`
-- **Init parameters**: `client`, `tools`, `toolChoice`, `maxIterations`, `handlers`
-- **Duplicate detection**: `precondition` fails if two tools share the same name
-- **run()**: Accepts model, messages, config; returns `ToolSessionResult`
+- **Explicit init**: `client`, `tools`, `toolChoice`, `maxIterations`, `handlers`
+- **Declarative init**: `client`, `model`, `toolChoice`, `maxIterations`, `@SessionBuilder configure`
+  - Parses `SessionComponent` array into messages, tools, and handlers
+  - Stores `model` and `initialMessages` for use with `run(_ prompt:)`
+- **Duplicate detection**: `precondition` fails if two tools share the same name (both inits)
+- **run(model:messages:config:)**: Accepts model, messages, config; returns `ToolSessionResult`
+- **run(_ prompt:)**: Shorthand for declarative init — appends user message to initial messages and runs with stored model. Precondition failure if not created with declarative init.
 - **Loop logic**: Parallel tool execution via `withThrowingTaskGroup`
 - **Error context**: `toolExecutionFailed` message includes error type name: `"[\(type(of: error))] \(error.localizedDescription)"`
 
@@ -90,11 +107,16 @@ Log entry for a single tool call execution.
 ### Agent (actor)
 High-level persistent agent with conversation history, parallel tool execution, and transcript.
 
-- **Init**: client, model, systemPrompt, tools, toolChoice, toolHandlers, config, maxToolIterations
-  - Explicit init: `precondition` fails on duplicate tool names
+- **Explicit init**: client, model, systemPrompt, tools, toolChoice, toolHandlers, config, maxToolIterations
+  - `precondition` fails on duplicate tool names
 - **Builder init**: Uses `@AgentToolBuilder` for declarative tool registration
   - Throws `LLMError.invalidValue("Duplicate tool name: '\(name)'")`  on duplicate tool names
-- **Methods**: `send(_:)`, `reset()`
+- **Declarative init**: Uses `@SessionBuilder` for mixed messages+tools configuration
+  - `init(client:model:maxToolIterations:configure:) throws`
+  - Extracts system messages and tools from `SessionComponent` array
+  - First system message becomes the system prompt
+  - Throws `LLMError.invalidValue` on duplicate tool names
+- **Methods**: `send(_:)`, `run(_:)` (alias for `send`), `reset()`
 - **Properties**: `history`, `transcript`, `registeredToolNames: [String]`, `toolCount: Int`
 - Uses `ToolSession` internally
 
@@ -130,3 +152,7 @@ Declarative syntax for registering tools with Agent.
 - `ChatResponse.Message.content` stays `String` type; null decodes as `""`
 - All new fields are optional/additive
 - New `LLMError` cases work with existing `default` switches
+- `User` config struct renamed to `UserID`; deprecated `UserIdentifier` typealias provided
+- `User()` convenience function added for creating user messages (replaces `UserMessage()` as preferred shorthand)
+- All existing inits for `ToolSession` and `Agent` remain unchanged; new declarative inits are additive
+- `Agent.run(_:)` is an additive alias for `send(_:)`

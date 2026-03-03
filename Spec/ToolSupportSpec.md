@@ -14,11 +14,12 @@ Shorthand constructors for common message roles:
 
 ```swift
 System("You are a helpful assistant.")   // TextMessage(role: .system, content: ...)
-UserMessage("What's the weather?")       // TextMessage(role: .user, content: ...)
+User("What's the weather?")             // TextMessage(role: .user, content: ...)
+UserMessage("What's the weather?")       // TextMessage(role: .user, content: ...) — retained for compatibility
 Assistant("The weather is sunny.")       // TextMessage(role: .assistant, content: ...)
 ```
 
-These work anywhere `TextMessage` works, including `@ChatBuilder` blocks. `Assistant()` is useful for building conversation history and few-shot examples.
+These work anywhere `TextMessage` works, including `@ChatBuilder` and `@SessionBuilder` blocks. `User()` is the preferred shorthand (coexists with the `UserID` config parameter because Swift resolves by return type in builder context). `UserMessage()` is retained for compatibility. `Assistant()` is useful for building conversation history and few-shot examples.
 
 ### Macro-Powered Tools (via SwiftChatCompletionsMacros)
 
@@ -42,6 +43,13 @@ struct GetCurrentWeather {
 Bridged to core DSL types via `SwiftChatCompletionsDSLMacros` target:
 - `AgentTool.init<T: ChatCompletionsTool>(_ instance: T)`
 - `Tool.init(from: ToolDefinition)`
+- `Tools<T: ChatCompletionsTool>(_ instance: T) -> AgentTool` — convenience for `@SessionBuilder` blocks:
+  ```swift
+  let agent = try Agent(client: client, model: "gpt-4") {
+      System("You are a helpful assistant.")
+      Tools(GetCurrentWeather())
+  }
+  ```
 
 ### Manual Tool Definition (JSONSchema)
 
@@ -69,7 +77,7 @@ let request = try ChatRequest(model: "gpt-4o", toolChoice: .auto) {
     calculatorTool
 } messages: {
     System("You are a helpful assistant.")
-    User("Weather in Alpharetta?")
+    User("Weather in Alpharetta?")     // User() convenience function
 }
 ```
 
@@ -104,8 +112,21 @@ Accumulates partial `ToolCallDelta` chunks into complete `ToolCall` objects. Sup
 
 ### ToolSession — Automatic Tool Execution
 
+**Declarative style** (preferred):
 ```swift
-// Basic usage with handlers dictionary
+let session = ToolSession(client: client, model: "gpt-4o") {
+    System("You are a weather assistant.")
+    AgentTool(tool: weatherTool) { args in
+        return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    }
+}
+
+let result = try await session.run("Weather in Paris?")
+print(result.response.firstContent ?? "")
+```
+
+**Explicit style**:
+```swift
 let session = ToolSession(
     client: client,
     tools: [weatherTool],
@@ -116,7 +137,7 @@ let session = ToolSession(
 
 let result = try await session.run(
     model: "gpt-4o",
-    messages: [UserMessage("Weather in Paris?")]
+    messages: [User("Weather in Paris?")]
 )
 print(result.response.firstContent ?? "")
 ```
@@ -125,6 +146,20 @@ Duplicate tool names trigger a `precondition` failure. Handler errors are wrappe
 
 ### Agent — Persistent Conversations
 
+**Declarative style** (preferred):
+```swift
+let agent = try Agent(client: client, model: "gpt-4o") {
+    System("You are a helpful assistant.")
+    AgentTool(tool: weatherTool) { args in
+        return "{\"temperature\": 72}"
+    }
+}
+
+let response1 = try await agent.run("Weather in Paris?")
+let response2 = try await agent.run("How about London?")
+```
+
+**Builder style** (with config parameters):
 ```swift
 let agent = try Agent(
     client: client,
@@ -140,7 +175,10 @@ let agent = try Agent(
 
 let response1 = try await agent.send("Weather in Paris?")
 let response2 = try await agent.send("How about London?")
+```
 
+**Common features** (both styles):
+```swift
 // Debugging transcript
 for entry in await agent.transcript { ... }
 
@@ -152,7 +190,7 @@ let count = await agent.toolCount            // 1
 await agent.reset()
 ```
 
-Duplicate tool names in the builder init throw `LLMError.invalidValue`. The explicit init uses a `precondition`.
+`run(_:)` is an alias for `send(_:)`. Duplicate tool names in the builder/declarative init throw `LLMError.invalidValue`. The explicit init uses a `precondition`.
 
 ### Error Handling
 
@@ -170,9 +208,11 @@ catch LLMError.toolExecutionFailed(let name, let message) { ... }
 
 ```
 Sources/SwiftChatCompletionsDSL/
-├── SwiftChatCompletionsDSL.swift    # Core types, messages, ChatRequest, LLMClient
-├── ToolSession.swift                 # ToolSession, ToolSessionResult, ToolCallLogEntry
+├── SwiftChatCompletionsDSL.swift    # Core types, messages, ChatRequest, LLMClient, ToolsBuilder
+├── ToolSession.swift                 # SessionComponent, SessionBuilder, ToolSession, ToolSessionResult, ToolCallLogEntry
 ├── Agent.swift                       # Agent actor, AgentTool, AgentToolBuilder, TranscriptEntry
+Sources/SwiftChatCompletionsDSLMacros/
+├── MacrosBridge.swift                # Tools(), AgentTool bridge, JSONSchema/Tool conversions
 ```
 
 ### Key Implementation Decisions
@@ -208,6 +248,8 @@ Sources/SwiftChatCompletionsDSL/
 | `ToolResultMessage` | struct | SwiftChatCompletionsDSL.swift |
 | `ToolsBuilder` | result builder | SwiftChatCompletionsDSL.swift |
 | `ToolCallAccumulator` | struct | SwiftChatCompletionsDSL.swift |
+| `SessionComponent` | enum | ToolSession.swift |
+| `SessionBuilder` | result builder | ToolSession.swift |
 | `ToolSession` | struct | ToolSession.swift |
 | `ToolSessionResult` | struct | ToolSession.swift |
 | `ToolCallLogEntry` | struct | ToolSession.swift |
@@ -224,5 +266,10 @@ Sources/SwiftChatCompletionsDSL/
 | `ChatResponse.Message.content` | Null → `""`, keeps `String` |
 | New optional fields | Additive only |
 | New `LLMError` cases | Additive; existing `default` switches work |
-| New message types (`System`, `UserMessage`, `Assistant` functions) | Additive convenience; `TextMessage` unchanged |
+| New message types (`System`, `User`, `UserMessage`, `Assistant` functions) | Additive convenience; `TextMessage` unchanged |
+| `User` config struct → `UserID` | Renamed; deprecated `UserIdentifier` typealias provided |
 | New ChatRequest inits with `tools:` | Additive; existing inits unchanged |
+| `SessionBuilder`, `SessionComponent` | New types; no existing API affected |
+| ToolSession declarative init + `run(_:)` | Additive; explicit init and `run(model:messages:)` unchanged |
+| Agent declarative init + `run(_:)` | Additive; explicit/builder inits and `send(_:)` unchanged |
+| `Tools()` bridge function | Additive; `AgentTool.init<T>` unchanged |
