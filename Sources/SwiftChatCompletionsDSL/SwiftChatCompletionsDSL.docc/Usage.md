@@ -340,7 +340,7 @@ let preciseRequest = try ChatRequest(model: "gpt-4") {
     try FrequencyPenalty(0.1)      // Reduce repetition
     try PresencePenalty(0.1)       // Encourage topic diversity
     try MaxTokens(300)
-    try User("tutorial-user")      // Track usage analytics
+    try UserID("tutorial-user")      // Track usage analytics
     try RequestTimeout(45)         // Custom timeout for this request
 } messages: {
     TextMessage(role: .system, content: "You are a technical writer. Be precise and avoid repetition.")

@@ -7,6 +7,8 @@ To support conversation history, the DSL is extended with:
 - An additional initializer for `ChatRequest` that accepts a pre-built array of messages (`[any ChatMessage]`), enabling users to pass existing conversation history directly without relying on the result builder.
 - A new `ChatConversation` struct for managing persistent conversation history, with methods to append messages and generate `ChatRequest`s. This facilitates stateful interactions, where history can be built incrementally across multiple requests.
 
+For tool calling and agent capabilities, see [ToolCalling.md](ToolCalling.md) and [ToolSupportSpec.md](ToolSupportSpec.md).
+
 ## Goals
 - **Explicit Configuration**: Require `baseURL` (full endpoint URL) in client initialization and `model` in every request, without defaults or path appending.
 - **Optional Parameters**: Allow any combination of optional parameters (`temperature`, `maxTokens`, `topP`, `frequencyPenalty`, `presencePenalty`, `n`, `logitBias`, `user`) via a `@ChatConfigBuilder` block, minimizing user code while ensuring type safety.
@@ -19,13 +21,14 @@ To support conversation history, the DSL is extended with:
 - **Error Handling**: Propagate errors with a custom error enum using `throws`.
 
 ## Requirements
-- **Swift Version**: 6.1+ (enable for trailing commas, `nonisolated`, improved type inference, e.g., for task groups).
+- **Swift Version**: 6.2+ (enable for trailing commas, `nonisolated`, improved type inference, e.g., for task groups).
 - **Dependencies**: None; use only Foundation (`URLSession` for networking, `Codable` for JSON serialization).
 - **API Compatibility**: Align with OpenAI Chat Completions JSON format for requests and responses (camelCase internally, snake_case in JSON via `CodingKeys`).
 - **Testing**: Support Swift Testing for async validation (e.g., `#expect` with concurrency traits).
 - **URL Handling**: Treat `baseURL` as the complete endpoint URL provided by the user, without modification.
-- **Minimum OS Versions**: macOS 12.0, iOS 15.0 (required for AsyncStream and URLSession.data(for:) availability).
-- **Date Context**: Spec aligns with usage on August 22, 2025, ensuring modern Swift practices.
+- **Minimum OS Versions**: macOS 13.0, iOS 16.0 (required for AsyncStream and URLSession.bytes(for:) availability).
+
+---
 
 ## Core Components
 
@@ -41,8 +44,8 @@ To support conversation history, the DSL is extended with:
   - JSON: Encodes as strings (e.g., `"system"`).
 
 - **LLMError**: Custom errors for API failures.
-  - Signature: `enum LLMError: Error { case invalidURL, encodingFailed(String), networkError(String), decodingFailed(String), serverError(statusCode: Int, message: String?), rateLimit, invalidResponse, invalidValue(String), missingBaseURL, missingModel }`
-  - Purpose: Handles errors like invalid URLs, JSON failures, server errors (e.g., HTTP 429 for rate limits), missing required fields, and invalid parameter values. The `invalidValue(String)` case is specifically for configuration parameter validation with descriptive error messages.
+  - Signature: `enum LLMError: Error, Equatable { case invalidURL, encodingFailed(String), networkError(String), decodingFailed(String), serverError(statusCode: Int, message: String?), rateLimit, invalidResponse, invalidValue(String), missingBaseURL, missingModel, maxIterationsExceeded(Int), unknownTool(String), toolExecutionFailed(toolName: String, message: String) }`
+  - Purpose: Handles errors like invalid URLs, JSON failures, server errors (e.g., HTTP 429 for rate limits), missing required fields, invalid parameter values, and tool calling errors. Conforms to `Equatable` (uses `String` descriptions rather than nested `Error` objects to maintain this).
   - **Error Cases**:
     - `invalidURL`: Base URL could not be converted to a valid URL
     - `encodingFailed(String)`: JSON encoding of the request failed
@@ -54,6 +57,9 @@ To support conversation history, the DSL is extended with:
     - `invalidValue(String)`: Configuration parameter validation failed
     - `missingBaseURL`: Empty or missing base URL in client initialization
     - `missingModel`: Empty or missing model in request
+    - `maxIterationsExceeded(Int)`: Tool-calling loop exceeded maximum iterations (see [ToolCalling.md](ToolCalling.md))
+    - `unknownTool(String)`: Tool name not found in registered handlers (see [ToolCalling.md](ToolCalling.md))
+    - `toolExecutionFailed(toolName: String, message: String)`: Tool handler threw an error during execution (see [ToolCalling.md](ToolCalling.md))
   - **Usage Example**:
     ```swift
     do {
@@ -79,8 +85,8 @@ To support conversation history, the DSL is extended with:
   - JSON: Concrete implementations encode their specific structure (e.g., `{ "role": String, "content": String }` for TextMessage).
 
 - **ChatConfigParameter**: Protocol for configuration parameters.
-  - Signature: `protocol ChatConfigParameter { func apply(to request: inout ChatRequest) }`
-  - Purpose: Allows parameter structs (e.g., `Temperature`) to modify `ChatRequest` fields during initialization.
+  - Signature: `protocol ChatConfigParameter: Sendable { func apply(to request: inout ChatRequest) }`
+  - Purpose: Allows parameter structs (e.g., `Temperature`) to modify `ChatRequest` fields during initialization. Requires `Sendable` conformance for Swift 6 strict concurrency safety.
 
 ### 4. Structs
 - **TextMessage**: Basic text-based message implementing `ChatMessage`.
@@ -117,10 +123,11 @@ To support conversation history, the DSL is extended with:
     - Signature: `struct LogitBias: ChatConfigParameter { let value: [String: Int]; init(_ value: [String: Int]); func apply(to request: inout ChatRequest) }`
     - Validation: None (assumes valid dictionary).
     - Applies: Sets `request.logitBias = value`.
-  - **User**:
-    - Signature: `struct User: ChatConfigParameter { let value: String; init(_ value: String) throws; func apply(to request: inout ChatRequest) }`
+  - **UserID** (formerly `User`):
+    - Signature: `struct UserID: ChatConfigParameter { let value: String; init(_ value: String) throws; func apply(to request: inout ChatRequest) }`
     - Validation: Throws `LLMError.invalidValue(String)` if `value` is empty.
     - Applies: Sets `request.user = value`.
+    - Note: Renamed from `User` to avoid conflict with the `User()` convenience message function.
   - **Stop** (additional param):
     - Signature: `struct Stop: ChatConfigParameter { let value: [String]; init(_ value: [String]) throws; func apply(to request: inout ChatRequest) }`
     - Validation: Throws `LLMError.invalidValue(String)` if array is empty or contains invalid strings.
@@ -140,10 +147,34 @@ To support conversation history, the DSL is extended with:
     - Applies: Sets `request.resourceTimeout = value`.
     - Purpose: Controls complete resource loading timeout including connection, request, and data transfer.
 
+- **Tool**: Defines a tool that the model can call.
+  - Signature:
+    ```swift
+    struct Tool: Sendable, Encodable {
+        let type: String  // defaults to "function"
+        let function: Function
+
+        init(type: String = "function", function: Function)
+
+        struct Function: Sendable, Encodable {
+            let name: String
+            let description: String
+            let parameters: JSONSchema
+
+            init(name: String, description: String, parameters: JSONSchema)
+
+            // Deprecated backward-compat init
+            @available(*, deprecated)
+            init(name: String, description: String, parameters: [String: String])
+        }
+    }
+    ```
+  - Purpose: Defines a callable tool with its function name, description, and JSON Schema parameters. The deprecated `[String: String]` init converts each key-value pair into a `.string(description:)` schema property.
+
 - **ChatRequest**: Represents the API request.
   - Signature:
     ```swift
-    struct ChatRequest: Encodable {
+    struct ChatRequest: Encodable, Sendable {
         let model: String
         let messages: [any ChatMessage]
         var temperature: Double?
@@ -155,32 +186,64 @@ To support conversation history, the DSL is extended with:
         var n: Int?
         var logitBias: [String: Int]?
         var user: String?
-        var stop: [String]?  // Additional
-        var tools: [Tool]?  // Additional, with Tool struct
+        var stop: [String]?
+        var tools: [Tool]?
+        var toolChoice: ToolChoice?
         var requestTimeout: TimeInterval?  // HTTP request timeout (10-900s)
         var resourceTimeout: TimeInterval?  // Complete resource loading timeout (30-3600s)
 
+        // 1. Builder messages + config
         init(
             model: String,
             stream: Bool = false,
-            @ChatConfigBuilder config: () -> [ChatConfigParameter] = { [] },
+            @ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
             @ChatBuilder messages: () -> [any ChatMessage]
         ) throws
 
+        // 2. Builder messages only (no config block)
         init(
             model: String,
             stream: Bool = false,
-            @ChatConfigBuilder config: () -> [ChatConfigParameter] = { [] },
+            @ChatBuilder messages: () -> [any ChatMessage]
+        ) throws
+
+        // 3. Array messages + config
+        init(
+            model: String,
+            stream: Bool = false,
+            @ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+            messages: [any ChatMessage]
+        ) throws
+
+        // 4. With inline tools builder + builder messages
+        init(
+            model: String,
+            stream: Bool = false,
+            toolChoice: ToolChoice? = nil,
+            @ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+            @ToolsBuilder tools: () -> [Tool],
+            @ChatBuilder messages: () -> [any ChatMessage]
+        ) throws
+
+        // 5. With inline tools builder + array messages
+        init(
+            model: String,
+            stream: Bool = false,
+            toolChoice: ToolChoice? = nil,
+            @ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+            @ToolsBuilder tools: () -> [Tool],
             messages: [any ChatMessage]
         ) throws
     }
     ```
-  - Initialization: 
+  - Initialization:
     - Builder version: Builds messages via result builder.
+    - Messages-only version (init #2): Convenience without config block, calls through to array init with empty config.
     - Array version: Accepts pre-built array of messages for conversation history.
-    - Both require non-empty `model`, throw `LLMError.missingModel` if empty. Apply config parameters via `apply(to:)` in a loop.
-  - JSON: Encodes to OpenAI format with snake_case keys (e.g., `max_tokens`, `top_p`, `logit_bias`) using `CodingKeys`.
-  - Purpose: Combines required `model`, `messages` (as array for history), optional `stream`, and config parameters.
+    - Tools versions: Accept inline tool definitions via `@ToolsBuilder` and optional `toolChoice`.
+    - All require non-empty `model`, throw `LLMError.missingModel` if empty. Apply config parameters via `apply(to:)` in a loop.
+  - JSON: Encodes to OpenAI format with snake_case keys (e.g., `max_tokens`, `top_p`, `logit_bias`, `tool_choice`) using `CodingKeys`. `requestTimeout` and `resourceTimeout` are excluded from JSON encoding (used only for URLSession configuration).
+  - Purpose: Combines required `model`, `messages` (as array for history), optional `stream`, config parameters, and optional tool definitions.
 
 - **ChatConversation**: Utility for managing conversation history.
   - Signature:
@@ -224,6 +287,14 @@ To support conversation history, the DSL is extended with:
             history.removeAll()
         }
 
+        mutating func addAssistantToolCalls(content: String?, toolCalls: [ToolCall]) {
+            add(message: AssistantToolCallMessage(content: content, toolCalls: toolCalls))
+        }
+
+        mutating func addToolResult(toolCallId: String, content: String) {
+            add(message: ToolResultMessage(toolCallId: toolCallId, content: content))
+        }
+
         func request(
             model: String,
             stream: Bool = false,
@@ -240,34 +311,35 @@ To support conversation history, the DSL is extended with:
 - **ChatResponse**: For non-streaming responses.
   - Signature:
     ```swift
-    struct ChatResponse: Decodable {
+    struct ChatResponse: Decodable, Sendable {
         let id: String
         let object: String
         let created: Int
         let model: String
         let choices: [Choice]
         let usage: Usage?
-        struct Choice: Decodable { let index: Int; let message: Message; let finishReason: String? }
-        struct Message: Decodable { let role: Role; let content: String }
-        struct Usage: Decodable { let promptTokens: Int; let completionTokens: Int; let totalTokens: Int }
+        struct Choice: Decodable, Sendable { let index: Int; let message: Message; let finishReason: String? }
+        struct Message: Decodable, Sendable { let role: Role; let content: String; let toolCalls: [ToolCall]? }
+        struct Usage: Decodable, Sendable { let promptTokens: Int; let completionTokens: Int; let totalTokens: Int }
     }
     ```
-  - JSON: Decodes from OpenAI format (e.g., `finish_reason`, `prompt_tokens`).
+  - JSON: Decodes from OpenAI format (e.g., `finish_reason`, `prompt_tokens`, `tool_calls`).
+  - Note: `Message` has a custom decoder — `content` uses `decodeIfPresent`, coalescing `null` to `""` so the type stays `String` (not `String?`) for backward compatibility when the model returns tool calls with null content.
 
 - **ChatDelta**: For streaming responses.
   - Signature:
     ```swift
-    struct ChatDelta: Decodable {
+    struct ChatDelta: Decodable, Sendable {
         let choices: [DeltaChoice]
-        struct DeltaChoice: Decodable {
+        struct DeltaChoice: Decodable, Sendable {
             let index: Int
             let delta: Delta
             let finishReason: String?
-            struct Delta: Decodable { let content: String?; let role: Role? }
+            struct Delta: Decodable, Sendable { let content: String?; let role: Role?; let toolCalls: [ToolCallDelta]? }
         }
     }
     ```
-  - JSON: Decodes SSE chunks with `delta.content` for incremental text.
+  - JSON: Decodes SSE chunks with `delta.content` for incremental text and `delta.tool_calls` for incremental tool call data.
 
 - **Response Convenience Extensions**: Convenience properties for common access patterns.
   - **ChatResponse Extensions**:
@@ -276,6 +348,8 @@ To support conversation history, the DSL is extended with:
         var firstContent: String? { choices.first?.message.content }
         var firstFinishReason: String? { choices.first?.finishReason }
         var totalTokens: Int { usage?.totalTokens ?? 0 }
+        var firstToolCalls: [ToolCall]? { choices.first?.message.toolCalls }
+        var requiresToolExecution: Bool  // true if firstToolCalls is non-nil and non-empty
     }
     ```
   - **ChatDelta Extensions**:
@@ -283,9 +357,10 @@ To support conversation history, the DSL is extended with:
     extension ChatDelta {
         var firstContent: String? { choices.first?.delta.content }
         var firstFinishReason: String? { choices.first?.finishReason }
+        var firstToolCallDeltas: [ToolCallDelta]? { choices.first?.delta.toolCalls }
     }
     ```
-  - Purpose: Provides quick access to the most commonly used response data without navigating nested structures. `firstContent` returns the content from the first choice, `firstFinishReason` returns the finish reason, and `totalTokens` returns the total token count (defaulting to 0 if unavailable).
+  - Purpose: Provides quick access to the most commonly used response data without navigating nested structures. `firstContent` returns the content from the first choice, `firstFinishReason` returns the finish reason, `totalTokens` returns the total token count (defaulting to 0 if unavailable). `requiresToolExecution` checks only `firstToolCalls` (not `firstFinishReason`) for provider compatibility. `firstToolCallDeltas` provides access to streaming tool call data.
   - **Token Usage Access Example**:
     ```swift
     let response = try await client.complete(request)
@@ -301,7 +376,18 @@ To support conversation history, the DSL is extended with:
     print("Total: \(response.totalTokens)")  // Returns 0 if usage unavailable
     ```
 
-### 5. Result Builders
+### 5. Convenience Message Functions
+
+Shorthand `@inlinable` free functions for creating common message types. These return `TextMessage` and work anywhere `TextMessage` works, including `@ChatBuilder` and `@SessionBuilder` blocks.
+
+- `System(_ content: String) -> TextMessage` — creates `TextMessage(role: .system, content: content)`
+- `UserMessage(_ content: String) -> TextMessage` — creates `TextMessage(role: .user, content: content)`, retained for compatibility
+- `User(_ content: String) -> TextMessage` — creates `TextMessage(role: .user, content: content)`, preferred shorthand. Coexists with `UserID` config parameter because Swift resolves overloads by return type: in `@ChatBuilder` context (expecting `any ChatMessage`) only this function matches, while in `@ChatConfigBuilder` context (expecting `ChatConfigParameter`) only `UserID` matches.
+- `Assistant(_ content: String) -> TextMessage` — creates `TextMessage(role: .assistant, content: content)`, useful for conversation history and few-shot examples
+
+See [ToolSupportSpec.md](ToolSupportSpec.md) for usage examples.
+
+### 6. Result Builders
 - **ChatBuilder**: Composes message sequences.
   - Signature:
     ```swift
@@ -332,7 +418,39 @@ To support conversation history, the DSL is extended with:
     ```
   - Purpose: Enables declarative configuration blocks with control flow.
 
-### 6. Actor: LLMClient
+- **ToolsBuilder**: Composes inline tool declarations for ChatRequest.
+  - Signature:
+    ```swift
+    @resultBuilder
+    struct ToolsBuilder {
+        static func buildBlock(_ components: Tool...) -> [Tool]
+        static func buildEither(first: [Tool]) -> [Tool]
+        static func buildEither(second: [Tool]) -> [Tool]
+        static func buildOptional(_ component: [Tool]?) -> [Tool]
+        static func buildArray(_ components: [[Tool]]) -> [Tool]
+    }
+    ```
+  - Purpose: Enables declarative inline tool declarations in `ChatRequest` initializers via a `tools:` parameter, supporting conditionals and loops.
+
+- **SessionBuilder**: Composes mixed messages and tools for declarative ToolSession/Agent configuration.
+  - Signature:
+    ```swift
+    @resultBuilder
+    struct SessionBuilder {
+        static func buildExpression(_ message: TextMessage) -> [SessionComponent]
+        static func buildExpression(_ message: any ChatMessage) -> [SessionComponent]
+        static func buildExpression(_ tool: AgentTool) -> [SessionComponent]
+        static func buildBlock(_ components: [SessionComponent]...) -> [SessionComponent]
+        static func buildEither(first: [SessionComponent]) -> [SessionComponent]
+        static func buildEither(second: [SessionComponent]) -> [SessionComponent]
+        static func buildOptional(_ component: [SessionComponent]?) -> [SessionComponent]
+        static func buildArray(_ components: [[SessionComponent]]) -> [SessionComponent]
+    }
+    ```
+  - Purpose: Enables Apple FoundationModels-style declarative configuration where both messages (e.g., `System("...")`) and tools (`AgentTool(...)`) can be mixed in a single builder block. Uses `SessionComponent` enum as the intermediate type.
+  - Related type: `SessionComponent` enum with cases `.message(any ChatMessage)` and `.agentTool(AgentTool)`.
+
+### 7. Actor: LLMClient
 - Signature:
   ```swift
   actor LLMClient {
@@ -344,9 +462,8 @@ To support conversation history, the DSL is extended with:
 - Purpose: Manages API calls with thread-safe state (e.g., `private let baseURL`, `private let apiKey`, `private let session: URLSession`).
 - Initialization: Takes `baseURL` (complete endpoint), `apiKey`, and optional `sessionConfiguration` (defaults to `URLSessionConfiguration.default`). Throws `LLMError.missingBaseURL` if invalid/empty. Creates `URLSession` with the provided configuration.
 - Methods:
-  - `complete`: Sends non-streaming POST request to `baseURL` with `Authorization: Bearer <apiKey>` and `Content-Type: application/json`. Throws `LLMError` on failure (e.g., HTTP 429 for rateLimit).
-  - `stream`: Returns `AsyncStream<ChatDelta>` for streaming, setting `Accept: text/event-stream`. Parses Server-Sent Events (SSE): Split string by '\n\n', process lines starting with 'data: ', trim prefix, decode JSON to `ChatDelta` if not '[DONE]', yield deltas, finish stream on '[DONE]' or error. Handle multi-line chunks and ignore non-data lines. Propagate errors via `continuation.finish(throwing:)`.
-- Notes: Use `URLSession` for networking, `JSONEncoder`/`JSONDecoder` for serialization. `nonisolated` stream method for usability without `await`. If no custom `sessionConfiguration` provided, use `URLSession.shared`.
+  - `complete`: Sends non-streaming POST request to `baseURL`. Throws `LLMError` on failure (e.g., HTTP 429 for `rateLimit`).
+  - `stream`: Returns `AsyncThrowingStream<ChatDelta, Error>` for streaming responses. `nonisolated` for usability without `await`.
 
 ## Usage Examples
 1. **Non-Streaming** (custom server):
@@ -370,7 +487,7 @@ To support conversation history, the DSL is extended with:
        print("Error: \(error)")
    }
    ```
-   - Notes: Specifies complete `baseURL`, required `model`. Config block includes only desired parameters with control flow. Trailing commas supported (Swift 6.1+).
+   - Notes: Specifies complete `baseURL`, required `model`. Config block includes only desired parameters with control flow. Trailing commas supported (Swift 6.2+).
 
 2. **Streaming** (OpenAI):
    ```swift
@@ -379,7 +496,7 @@ To support conversation history, the DSL is extended with:
        try ChatRequest(model: "gpt-4o", stream: true) {
            Temperature(0.8)
            MaxTokens(200)
-           User("user123")
+           UserID("user123")
        } messages: {
            TextMessage(role: .user, content: "Write a poem."),
        }
@@ -463,26 +580,9 @@ To support conversation history, the DSL is extended with:
 - **Custom Parameters**: Add `ChatConfigParameter` conformances (e.g., `StopSequence`).
 - **Client Extensions**: Extend `LLMClient` for additional endpoints (e.g., model listing).
 
-## Implementation Notes
-- **Project Structure**: Generate as a Swift Package Manager package with structure: Package.swift (target 'SwiftChatCompletionsDSL'), ./Sources/SwiftChatCompletionsDSL/ containing all files. Make types public where appropriate (e.g., `public struct ChatRequest`). No tests or examples in generated code; focus on library sources.
-- **Access Levels**: Mark client-facing types/methods as `public` (e.g., `public actor LLMClient`, `public struct ChatRequest`). Use `private` for internal state (e.g., `private let baseURL`). Ensure `@resultBuilder` and protocols are public.
-- **URL Handling**: Use `baseURL` as complete endpoint; validate at `LLMClient` init.
-- **Validation**: Enforce non-empty `baseURL` and `model`. Configuration structs validate ranges (e.g., `Temperature` 0.0–2.0, `TopP` 0.0–1.0).
-- **JSON**: Use `CodingKeys` for snake_case (e.g., `max_tokens`, `top_p`). Use `nestedUnkeyedContainer` for encoding `[any ChatMessage]` arrays.
-- **Swift 6.1+**: Leverage trailing commas, `nonisolated`, async type inference. Use `@inlinable` on builder methods for optimization.
-- **Concurrency & Sendable**: All types must conform to `Sendable` for Swift 6 strict concurrency. This includes `ChatRequest`, `ChatMessage`, `Role`, `LLMError`, and all response types. For `LLMError`, use string descriptions instead of Error objects to maintain `Equatable` conformance.
-- **Result Builder Configuration**: Config closures must be marked as `() throws -> [ChatConfigParameter]` to allow throwing parameter initialization within the DSL.
-- **Platform Requirements**: Set minimum platforms to `macOS(.v12), iOS(.v15)` in Package.swift for `AsyncStream` and `URLSession.data(for:)` availability.
-- **Streaming**: Parse SSE, handling `data: [DONE]` and errors. Each chunk is valid JSON decoding to `ChatDelta`. Use `@Sendable` closures and capture local values to avoid actor isolation issues. The `stream()` method returns `AsyncThrowingStream<ChatDelta, Error>` to properly propagate errors.
-- **Session Caching**: `LLMClient` uses an internal `SessionCache` actor to cache `URLSession` instances keyed by timeout configuration (requestTimeout + resourceTimeout). This improves performance by reusing sessions for requests with identical timeout settings instead of creating new sessions for each request.
-- **Tool Support**: For `Tool.Function.parameters`, use `[String: String]` instead of `[String: Any]` to maintain `Sendable` conformance. This simplifies JSON schema definitions while maintaining type safety.
-- **Testing**: Support Swift Testing with `#expect` for async tests. Key considerations:
-  - Use array-based message initialization for simpler test syntax
-  - Mock URLSession with URLProtocol for network tests
-  - Test parameter validation with proper error types
-  - Tests should be stored in ./Tests/SwiftChatCompletionsDSLTests folder
-- **Docs**: Add SwiftDoc comments for all public APIs.
-- **Edge Cases**: Handle empty messages, rate limits (429), invalid JSON, server errors.
+For implementation details, see [SwiftChatCompletionsDSL-HOW.md](SwiftChatCompletionsDSL-HOW.md).
+
+---
 
 ## Required Tests
 These tests validate key DSL behaviors and must pass for the implementation to conform to the spec. Use the Swift Testing framework with `#expect` for assertions, supporting async and throwing scenarios. Tests should be placed in a separate test target (e.g., SwiftChatCompletionsDSLTests) and use mocks where necessary (e.g., `URLProtocol` for network).
@@ -583,4 +683,4 @@ These tests validate key DSL behaviors and must pass for the implementation to c
 
 These tests cover essential functionality, errors, and extensibility. Implement additional tests for full coverage if needed.
 
-This spec provides a clear blueprint for an LLM code generator to produce a Swift 6.1+ package, ensuring a declarative, type-safe, and flexible DSL for OpenAI-compatible LLM servers.
+This spec provides a clear blueprint for an LLM code generator to produce a Swift 6.2+ package, ensuring a declarative, type-safe, and flexible DSL for OpenAI-compatible LLM servers.

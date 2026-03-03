@@ -1,18 +1,19 @@
 # SwiftChatCompletionsDSL
 
-[![Swift 6.1+](https://img.shields.io/badge/Swift-6.1+-orange.svg)](https://swift.org)
-[![Platforms](https://img.shields.io/badge/Platforms-macOS%2012.0+%20|%20iOS%2015.0+-blue.svg)](https://swift.org)
+[![Swift 6.2+](https://img.shields.io/badge/Swift-6.2+-orange.svg)](https://swift.org)
+[![Platforms](https://img.shields.io/badge/Platforms-macOS%2013.0+%20|%20iOS%2016.0+-blue.svg)](https://swift.org)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+[![Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](https://claude.ai/code)
 
-> A declarative Swift DSL for building type-safe, readable chat completion requests with OpenAI-compatible APIs
+> The only zero-dependency SwiftUI-style DSL with built-in Apple-native tool calling for any OpenAI-compatible backend
 
 ## Overview
 
 SwiftChatCompletionsDSL is a modern Swift package that provides a **Domain Specific Language (DSL)** for interacting with Large Language Model (LLM) APIs. Instead of wrestling with complex JSON structures and manual request building, you can express your intent clearly and safely using Swift's powerful type system.
 
-### What is a DSL?
+The DSL includes full **tool calling**, an automatic **ToolSession** loop, and a persistent **Agent** actor — bringing Apple FoundationModels-style ergonomics to any OpenAI-compatible endpoint.
 
-A **Domain Specific Language** is a specialized programming language designed for a particular problem domain. Unlike general-purpose languages, DSLs provide focused, expressive syntax that makes complex operations simple and intuitive. SwiftChatCompletionsDSL transforms verbose API calls into readable, declarative code.
+### Before & After
 
 **Traditional approach:**
 ```swift
@@ -25,6 +26,7 @@ request["messages"] = [
     ["role": "system", "content": "You are helpful"],
     ["role": "user", "content": "Explain Swift"]
 ]
+// No type safety, no validation, runtime crashes
 ```
 
 **SwiftChatCompletionsDSL approach:**
@@ -34,20 +36,22 @@ let request = try ChatRequest(model: "gpt-4") {
     try Temperature(0.7)
     try MaxTokens(150)
 } messages: {
-    TextMessage(role: .system, content: "You are helpful")
-    TextMessage(role: .user, content: "Explain Swift")
+    System("You are helpful")
+    User("Explain Swift")
 }
 ```
 
 ### Key Benefits
 
-- 🎯 **Type Safety**: Compile-time validation prevents runtime errors
-- 📖 **Readable Code**: Self-documenting, declarative syntax
-- 🚀 **Swift Concurrency**: Built with async/await and actors
-- 🔧 **Extensible**: Easy to add custom messages and parameters
-- 🌊 **Streaming Support**: Real-time response processing
-- ⏱️ **Timeout Control**: Configurable request and resource timeouts
-- 🏗️ **Result Builders**: Leverage Swift's powerful DSL capabilities
+- **Type Safety**: Compile-time validation prevents runtime errors
+- **Declarative Syntax**: Self-documenting, readable code using result builders
+- **Swift Concurrency**: Built with async/await and actors throughout
+- **Tool Calling**: Full tool_calls parsing, parallel execution, automatic loops
+- **Agent**: Persistent multi-turn conversations with automatic tool handling
+- **Streaming Support**: Real-time response processing with AsyncThrowingStream
+- **Timeout Control**: Configurable request and resource timeouts
+- **Zero Dependencies**: Core library uses only Foundation
+- **Any Backend**: Works with OpenAI, Azure, Ollama, LM Studio, or any compatible endpoint
 
 ## Quick Start
 
@@ -57,8 +61,15 @@ Add SwiftChatCompletionsDSL to your project using Swift Package Manager:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/your-username/SwiftChatCompletionsDSL", from: "1.0.0")
+    .package(url: "https://github.com/RichNasz/SwiftChatCompletionsDSL", from: "1.0.0")
 ]
+```
+
+For macro-powered tool definitions, also add the macros bridge:
+
+```swift
+// In your target dependencies:
+.product(name: "SwiftChatCompletionsDSLMacros", package: "SwiftChatCompletionsDSL")
 ```
 
 ### Basic Usage
@@ -66,197 +77,304 @@ dependencies: [
 ```swift
 import SwiftChatCompletionsDSL
 
-// Create a client
 let client = try LLMClient(
     baseURL: "https://api.openai.com/v1/chat/completions",
     apiKey: "your-api-key"
 )
 
-// Build a request using the DSL
 let request = try ChatRequest(model: "gpt-4") {
     try Temperature(0.7)
     try MaxTokens(150)
 } messages: {
-    TextMessage(role: .system, content: "You are a helpful assistant.")
-    TextMessage(role: .user, content: "Explain async/await in Swift.")
+    System("You are a helpful assistant.")
+    User("Explain async/await in Swift.")
 }
 
-// Get the response
 let response = try await client.complete(request)
-print(response.firstContent ?? "No response")  // Convenience property
+print(response.firstContent ?? "No response")
 ```
 
-## Usage Examples
+## Tool Calling & Agents (Apple-style)
 
-### Non-Streaming Chat Completion
+### Defining Tools with JSONSchema
 
 ```swift
-import SwiftChatCompletionsDSL
+let weatherTool = Tool(function: Tool.Function(
+    name: "get_weather",
+    description: "Get current weather for a location",
+    parameters: .object(
+        properties: [
+            "location": .string(description: "City and state, e.g. San Francisco, CA"),
+            "unit": .string(description: "Temperature unit", enumValues: ["celsius", "fahrenheit"]),
+        ],
+        required: ["location"]
+    )
+))
+```
 
-let client = try LLMClient(
-    baseURL: "https://api.openai.com/v1/chat/completions",
-    apiKey: "your-api-key"
+### Macro-Powered Tools (with SwiftChatCompletionsMacros)
+
+For the most ergonomic tool definitions, use the companion [SwiftChatCompletionsMacros](https://github.com/RichNasz/SwiftChatCompletionsMacros) package:
+
+```swift
+import SwiftChatCompletionsDSLMacros
+import SwiftChatCompletionsMacros
+
+@ChatCompletionsToolArguments
+struct WeatherArgs {
+    @ChatCompletionsToolGuide(description: "City and state, e.g. Alpharetta, GA")
+    var location: String
+
+    @ChatCompletionsToolGuide(description: "Temperature unit", .anyOf(["celsius", "fahrenheit"]))
+    var unit: String?
+}
+
+/// Get the current weather for a location
+@ChatCompletionsTool
+struct GetWeather {
+    typealias Arguments = WeatherArgs
+
+    func call(arguments: WeatherArgs) async throws -> ToolOutput {
+        // Your weather API call here
+        return ToolOutput(content: "{\"temperature\": 72}")
+    }
+}
+
+// Bridge to AgentTool with one line:
+let agentTool = AgentTool(GetWeather())
+```
+
+**Manual vs Macro — side-by-side comparison:**
+
+| Aspect | Manual | Macro |
+|--------|--------|-------|
+| Parameter schema | Hand-write `JSONSchema` | Auto-generated from struct |
+| Argument parsing | Manual JSON decode | Auto-decoded to typed struct |
+| Tool name | Hand-write string | Auto-derived from type name |
+| Description | Hand-write string | Extracted from doc comment |
+| Lines of code | ~15 per tool | ~8 per tool |
+
+### Inline Tools with Result Builder
+
+```swift
+let request = try ChatRequest(model: "gpt-4o", toolChoice: .auto) {
+    try Temperature(0.2)
+} tools: {
+    weatherTool
+    calculatorTool
+} messages: {
+    System("You are a helpful assistant.")
+    User("What's the weather in Paris?")
+}
+```
+
+### Manual Tool-Calling Loop
+
+```swift
+let response = try await client.complete(request)
+
+if response.requiresToolExecution, let toolCalls = response.firstToolCalls {
+    // Model wants to call tools — execute them and send results back
+    for toolCall in toolCalls {
+        print("Tool: \(toolCall.function.name)")
+        print("Args: \(toolCall.function.arguments)")
+    }
+}
+```
+
+### ToolSession — Declarative Style
+
+`ToolSession` handles the entire tool-calling loop automatically. The declarative init uses `@SessionBuilder` to mix system messages and tools in one block:
+
+```swift
+let session = ToolSession(client: client, model: "gpt-4o") {
+    System("You are a weather assistant.")
+    AgentTool(tool: weatherTool) { arguments in
+        return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    }
+}
+
+let result = try await session.run("What's the weather in Paris?")
+print(result.response.firstContent ?? "")  // "The weather in Paris is 72°F and sunny."
+```
+
+<details>
+<summary>Explicit init (alternative)</summary>
+
+```swift
+let session = ToolSession(
+    client: client,
+    tools: [weatherTool],
+    handlers: ["get_weather": { arguments in
+        return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    }]
 )
 
-let request = try ChatRequest(model: "gpt-4") {
-    try Temperature(0.7)
-    try MaxTokens(150)
-    try TopP(0.9)
-    try RequestTimeout(60)       // 60 second request timeout
-    try ResourceTimeout(300)     // 5 minute total timeout
-} messages: {
-    TextMessage(role: .system, content: "You are a programming assistant.")
-    TextMessage(role: .user, content: "How do I handle errors in Swift?")
-}
-
-do {
-    let response = try await client.complete(request)
-    if let content = response.firstContent {  // Convenience property
-        print("Assistant: \(content)")
-    }
-
-    // Access token usage for cost tracking
-    if let usage = response.usage {
-        print("Input tokens: \(usage.promptTokens)")
-        print("Output tokens: \(usage.completionTokens)")
-        print("Total tokens: \(usage.totalTokens)")
-    }
-} catch {
-    print("Error: \(error)")
-}
+let result = try await session.run(
+    model: "gpt-4o",
+    messages: [User("What's the weather in Paris?")]
+)
 ```
+</details>
 
-### Streaming Response
+### Agent — Persistent Conversations with Tools
+
+`Agent` is an actor that manages conversation history, automatically executes tools via `ToolSession`, and maintains a debugging transcript.
 
 ```swift
-let streamingRequest = try ChatRequest(model: "gpt-4", stream: true) {
+let agent = try Agent(client: client, model: "gpt-4o") {
+    System("You are a helpful assistant with weather data access.")
+    AgentTool(tool: weatherTool) { arguments in
+        return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    }
+}
+
+// Multi-turn — agent remembers history automatically
+let response1 = try await agent.run("What's the weather in Paris?")
+print(response1)  // "The weather in Paris is 72°F and sunny."
+
+let response2 = try await agent.run("How about London?")
+print(response2)  // "The weather in London is..."
+```
+
+<details>
+<summary>Explicit init (alternative)</summary>
+
+```swift
+let agent = try Agent(
+    client: client,
+    model: "gpt-4o",
+    systemPrompt: "You are a helpful assistant with weather data access."
+) {
+    try Temperature(0.7)
+} tools: {
+    AgentTool(tool: weatherTool) { arguments in
+        return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    }
+}
+
+let response = try await agent.send("What's the weather in Paris?")
+```
+</details>
+
+#### Transcript Inspection
+
+```swift
+for entry in await agent.transcript {
+    switch entry {
+    case .userMessage(let msg):      print("[User] \(msg)")
+    case .assistantMessage(let msg): print("[Assistant] \(msg)")
+    case .toolCall(let name, _):     print("[Tool Call] \(name)")
+    case .toolResult(let name, _, let duration):
+        print("[Tool Result] \(name) (\(duration))")
+    case .error(let msg):            print("[Error] \(msg)")
+    }
+}
+
+// Reset when starting a new conversation
+await agent.reset()
+```
+
+## Streaming
+
+```swift
+let request = try ChatRequest(model: "gpt-4", stream: true) {
     try Temperature(0.8)
     try MaxTokens(200)
 } messages: {
-    TextMessage(role: .user, content: "Write a haiku about Swift programming.")
+    User("Write a haiku about Swift.")
 }
 
-print("Assistant: ", terminator: "")
-for await delta in client.stream(streamingRequest) {
-    if let content = delta.firstContent {  // Convenience property
+for try await delta in client.stream(request) {
+    if let content = delta.firstContent {
         print(content, terminator: "")
     }
 }
-print() // New line when complete
 ```
 
-### Timeout Configuration
-
-Control network timeouts for reliable operations:
-
-```swift
-let request = try ChatRequest(model: "gpt-4") {
-    try Temperature(0.7)
-    try MaxTokens(200)
-    try RequestTimeout(30)       // Individual HTTP request timeout (10-900 seconds)
-    try ResourceTimeout(120)     // Complete operation timeout (30-3600 seconds)
-} messages: {
-    TextMessage(role: .user, content: "Generate a detailed analysis.")
-}
-```
-
-**Timeout Guidelines:**
-- **RequestTimeout**: How long to wait for server response to individual requests
-- **ResourceTimeout**: Total time for complete resource loading (should be larger than RequestTimeout)
-- **Best Practices**: Use shorter timeouts for user-facing interactions, longer for background processing
-
-### Conversation Management
-
-Use `ChatConversation` to manage multi-turn conversations:
+## Conversation Management
 
 ```swift
 var conversation = ChatConversation {
-    TextMessage(role: .system, content: "You are a helpful tutor.")
+    System("You are a helpful tutor.")
 }
 
-// Add messages with convenience methods
 conversation.addUser(content: "What is recursion?")
 conversation.addAssistant(content: "Recursion is when a function calls itself...")
 conversation.addUser(content: "Show me an example.")
 
-// Check conversation state
-print("Messages: \(conversation.messageCount)")
-print("Last role: \(conversation.lastMessageRole ?? .user)")
+// Tool call history support
+conversation.addAssistantToolCalls(content: nil, toolCalls: toolCalls)
+conversation.addToolResult(toolCallId: "call_123", content: "42")
 
-// Generate request from history
 let request = try conversation.request(model: "gpt-4") {
     try Temperature(0.7)
 }
-
-// Clear when starting fresh
-conversation.clear()
 ```
 
-### Error Handling
-
-The DSL provides comprehensive error handling through the `LLMError` enum:
+## Error Handling
 
 ```swift
 do {
     let response = try await client.complete(request)
     print(response.firstContent ?? "No response")
 } catch LLMError.rateLimit {
-    // HTTP 429 - Rate limited by the API
     print("Rate limited. Wait before retrying.")
 } catch LLMError.serverError(let statusCode, let message) {
-    // HTTP 4xx/5xx errors with status code and optional message
     print("Server error \(statusCode): \(message ?? "Unknown")")
 } catch LLMError.networkError(let description) {
-    // Connection issues, timeouts, DNS failures
     print("Network error: \(description)")
-} catch LLMError.invalidValue(let message) {
-    // Parameter validation errors (e.g., Temperature out of range)
-    print("Invalid parameter: \(message)")
-} catch LLMError.decodingFailed(let message) {
-    // Response parsing errors
-    print("Failed to decode response: \(message)")
+} catch LLMError.maxIterationsExceeded(let max) {
+    print("Tool-calling loop exceeded \(max) iterations")
+} catch LLMError.unknownTool(let name) {
+    print("Model called unregistered tool: \(name)")
+} catch LLMError.toolExecutionFailed(let name, let message) {
+    print("Tool \(name) failed: \(message)")
 } catch {
     print("Unexpected error: \(error)")
 }
 ```
 
-**Common Error Types:**
-- **rateLimit**: API rate limit exceeded (HTTP 429)
-- **serverError**: Server returned an error with status code
-- **networkError**: Connection failed, timed out, or DNS error
-- **invalidValue**: Configuration parameter out of valid range
-- **missingBaseURL/missingModel**: Required fields not provided
+## Configuration Parameters
 
-For more comprehensive examples, see the [Examples/](Examples/) folder.
+All parameters validate ranges at construction time:
 
-## Documentation
+| Parameter | Range | Description |
+|-----------|-------|-------------|
+| `Temperature` | 0.0 - 2.0 | Sampling temperature |
+| `MaxTokens` | 1 - 1,000,000 | Maximum tokens to generate |
+| `TopP` | 0.0 - 1.0 | Nucleus sampling |
+| `FrequencyPenalty` | -2.0 - 2.0 | Frequency penalty |
+| `PresencePenalty` | -2.0 - 2.0 | Presence penalty |
+| `N` | 1 - 128 | Number of completions |
+| `RequestTimeout` | 10 - 900s | HTTP request timeout |
+| `ResourceTimeout` | 30 - 3600s | Total resource timeout |
+| `ToolChoiceParam` | auto/none/required/function | Tool selection strategy |
 
-- 📚 **[Full Documentation](https://your-docs-url.com)** - Complete API reference with DocC
-- 🎓 **[DSL Guide for Beginners](https://your-docs-url.com/dsl-guide)** - Learn Domain Specific Languages step-by-step
-- 🏗️ **[Architecture Overview](https://your-docs-url.com/architecture)** - Technical deep dive into the implementation
-- 💡 **[Usage Examples](https://your-docs-url.com/usage)** - Practical examples for all skill levels
+## Package Structure
+
+```
+Products:
+  SwiftChatCompletionsDSL          # Core library (zero dependencies)
+  SwiftChatCompletionsDSLMacros    # Bridge to SwiftChatCompletionsMacros
+
+Targets:
+  SwiftChatCompletionsDSL          # Core (Foundation only)
+  SwiftChatCompletionsDSLMacros    # Bridge target
+  SwiftChatCompletionsDSLTests     # 120 tests
+```
 
 ## Requirements
 
-- **Swift**: 6.1 or later
-- **Platforms**: 
-  - macOS 12.0+
-  - iOS 15.0+
-- **Dependencies**: None (Foundation only)
+- **Swift**: 6.2 or later
+- **Platforms**: macOS 13.0+, iOS 16.0+
+- **Core Dependencies**: None (Foundation only)
+- **Macros Bridge**: Requires [SwiftChatCompletionsMacros](https://github.com/RichNasz/SwiftChatCompletionsMacros)
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details on:
-
-- Reporting issues
-- Suggesting features
-- Submitting pull requests
-- Code style guidelines
+We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
 
 ## License
 
 SwiftChatCompletionsDSL is released under the Apache 2.0 license. See [LICENSE](LICENSE) for details.
-
----
-
-**Made with ❤️ by the Swift community**

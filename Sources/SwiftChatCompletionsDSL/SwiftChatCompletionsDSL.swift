@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import SwiftChatCompletionsMacros
 
 // MARK: - Type Aliases
 
@@ -81,6 +82,12 @@ public enum LLMError: Error, Equatable {
 	case missingBaseURL
 	/// Model name is missing or empty
 	case missingModel
+	/// Tool-calling loop exceeded maximum iterations
+	case maxIterationsExceeded(Int)
+	/// Tool name not found in registered handlers
+	case unknownTool(String)
+	/// Tool handler threw an error during execution
+	case toolExecutionFailed(toolName: String, message: String)
 }
 
 // MARK: - Validation Helpers
@@ -217,7 +224,7 @@ public protocol ChatMessage: Encodable, Sendable {
 /// ## Built-in Parameters
 /// See ``Temperature``, ``MaxTokens``, ``TopP``, ``FrequencyPenalty``, ``PresencePenalty``, 
 /// ``N``, ``User``, ``Stop``, ``LogitBias``, and ``Tools`` for examples.
-public protocol ChatConfigParameter {
+public protocol ChatConfigParameter: Sendable {
 	/// Apply this configuration parameter to the given request.
 	/// - Parameter request: The request to modify
 	func apply(to request: inout ChatRequest)
@@ -258,6 +265,99 @@ public struct TextMessage: ChatMessage, Sendable {
 		self.role = role
 		self.content = content
 	}
+}
+
+// MARK: - Convenience Message Functions
+
+/// Creates a system message with the given content.
+///
+/// Shorthand for `TextMessage(role: .system, content: content)`.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") {
+///     try Temperature(0.7)
+/// } messages: {
+///     System("You are a helpful assistant.")
+///     User("Hello!")
+/// }
+/// ```
+///
+/// - Parameter content: The system instruction text
+/// - Returns: A ``TextMessage`` with role `.system`
+@inlinable
+public func System(_ content: String) -> TextMessage {
+	TextMessage(role: .system, content: content)
+}
+
+/// Creates a user message with the given content.
+///
+/// Shorthand for `TextMessage(role: .user, content: content)`.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") {
+///     try Temperature(0.7)
+/// } messages: {
+///     System("You are a helpful assistant.")
+///     UserMessage("Explain async/await in Swift.")
+/// }
+/// ```
+///
+/// - Note: ``User(_:)-95r48`` is the preferred shorthand. `UserMessage` is retained for compatibility.
+///
+/// - Parameter content: The user message text
+/// - Returns: A ``TextMessage`` with role `.user`
+@inlinable
+public func UserMessage(_ content: String) -> TextMessage {
+	TextMessage(role: .user, content: content)
+}
+
+/// Creates a user message with the given content.
+///
+/// Apple FoundationModels-style shorthand for `TextMessage(role: .user, content: content)`.
+/// This function coexists with the ``User`` configuration struct because Swift resolves
+/// overloads by return type: in `@ChatBuilder` context (expecting `any ChatMessage`)
+/// only this function matches, while in `@ChatConfigBuilder` context (expecting
+/// `ChatConfigParameter`) only the ``User`` struct matches.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") {
+///     try Temperature(0.7)
+/// } messages: {
+///     System("You are a helpful assistant.")
+///     User("Explain async/await in Swift.")
+/// }
+/// ```
+///
+/// - Parameter content: The user message text
+/// - Returns: A ``TextMessage`` with role `.user`
+@inlinable
+public func User(_ content: String) -> TextMessage {
+	TextMessage(role: .user, content: content)
+}
+
+/// Creates an assistant message with the given content.
+///
+/// Shorthand for `TextMessage(role: .assistant, content: content)`.
+/// Useful when building conversation history or few-shot examples.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") messages: {
+///     System("You are a helpful assistant.")
+///     UserMessage("What is 2+2?")
+///     Assistant("4")
+///     UserMessage("And 3+3?")
+/// }
+/// ```
+///
+/// - Parameter content: The assistant message text
+/// - Returns: A ``TextMessage`` with role `.assistant`
+@inlinable
+public func Assistant(_ content: String) -> TextMessage {
+	TextMessage(role: .assistant, content: content)
 }
 
 // MARK: - Configuration Parameter Structs
@@ -649,17 +749,17 @@ public struct LogitBias: ChatConfigParameter {
 /// ## Example Usage
 /// ```swift
 /// // Using a hashed user ID
-/// try User("user_abc123")
-/// 
+/// try UserID("user_abc123")
+///
 /// // Using a UUID-based identifier
-/// try User("550e8400-e29b-41d4-a716-446655440000")
-/// 
+/// try UserID("550e8400-e29b-41d4-a716-446655440000")
+///
 /// // Using an application-specific format
-/// try User("app_user_12345")
+/// try UserID("app_user_12345")
 /// ```
 ///
 /// - Note: User identifier cannot be empty. Empty strings will throw ``LLMError/invalidValue(_:)``.
-public struct User: ChatConfigParameter {
+public struct UserID: ChatConfigParameter {
 	/// The user identifier string (cannot be empty)
 	public let value: String
 
@@ -868,120 +968,299 @@ public struct ResourceTimeout: ChatConfigParameter {
 	}
 }
 
-// MARK: - Tool Support (Future Extension)
+// MARK: - JSON Schema
 
-/// Defines a tool that the model can call to perform actions or retrieve information.
+/// Type alias for the macros package JSON Schema type.
 ///
-/// Tools enable the AI model to interact with external systems, perform calculations,
-/// retrieve real-time data, or execute specific functions. This is an advanced feature
-/// that allows for more dynamic and interactive AI applications.
+/// `JSONSchema` is an alias for `JSONSchemaValue` from `SwiftChatCompletionsMacros`.
+/// Use the static factory methods to construct schemas:
 ///
-/// ## Tool Types
-/// Currently, only "function" type tools are supported, which allow the model to call
-/// predefined functions with specific parameters and receive structured responses.
-///
-/// ## Function Tool Structure
-/// Each function tool must specify:
-/// - **Name**: Unique identifier for the function
-/// - **Description**: Clear explanation of what the function does
-/// - **Parameters**: Schema defining the expected input parameters
-///
-/// ## Example Usage
 /// ```swift
-/// let weatherTool = Tool(function: Tool.Function(
-///     name: "get_weather",
-///     description: "Get current weather information for a specific location",
-///     parameters: [
-///         "type": "object",
-///         "properties": "{\"location\": {\"type\": \"string\", \"description\": \"City name\"}}",
-///         "required": "[\"location\"]"
-///     ]
-/// ))
-/// 
-/// let calculatorTool = Tool(function: Tool.Function(
-///     name: "calculate",
-///     description: "Perform basic mathematical calculations",
-///     parameters: [
-///         "type": "object",
-///         "properties": "{\"expression\": {\"type\": \"string\", \"description\": \"Math expression\"}}",
-///         "required": "[\"expression\"]"
-///     ]
-/// ))
+/// let schema = JSONSchema.object(
+///     properties: [
+///         "location": .string(description: "The city name"),
+///         "unit": .string(description: "Temperature unit", enumValues: ["celsius", "fahrenheit"]),
+///     ],
+///     required: ["location"]
+/// )
 /// ```
-///
-/// - Note: Tool calling requires appropriate model support and additional handling of tool responses.
-public struct Tool: Codable, Sendable {
-	/// The type of tool (currently only "function" is supported)
-	public let type: String
-	/// The function definition for this tool
-	public let function: Function
-	
-	/// Represents a callable function with defined parameters and behavior.
+public typealias JSONSchema = JSONSchemaValue
+
+extension JSONSchemaValue {
+	/// Creates an object schema from a dictionary of properties.
 	///
-	/// Function tools allow the AI model to call external functions with structured parameters.
-	/// The model will generate function calls based on the conversation context and the function
-	/// descriptions provided.
+	/// Properties are sorted alphabetically for deterministic encoding order.
+	/// This overload accepts Swift dictionary syntax alongside the native tuple-array form.
 	///
-	/// ## Parameter Schema
-	/// The parameters dictionary should follow JSON Schema format to define:
-	/// - Parameter types (string, number, boolean, object, array)
-	/// - Required vs optional parameters
-	/// - Parameter descriptions and constraints
-	/// - Default values where applicable
-	///
-	/// ## Example Function Definitions
-	/// ```swift
-	/// // Simple function with one required parameter
-	/// Tool.Function(
-	///     name: "get_time",
-	///     description: "Get current time in specified timezone",
-	///     parameters: [
-	///         "type": "object",
-	///         "properties": "{\"timezone\": {\"type\": \"string\"}}",
-	///         "required": "[\"timezone\"]"
-	///     ]
-	/// )
-	/// 
-	/// // Complex function with multiple parameters
-	/// Tool.Function(
-	///     name: "send_email",
-	///     description: "Send an email to specified recipients",
-	///     parameters: [
-	///         "type": "object",
-	///         "properties": "{\"to\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"subject\": {\"type\": \"string\"}, \"body\": {\"type\": \"string\"}}",
-	///         "required": "[\"to\", \"subject\", \"body\"]"
-	///     ]
-	/// )
-	/// ```
-	public struct Function: Codable, Sendable {
-		/// The name of the function (must be unique within the tool set)
-		public let name: String
-		/// Human-readable description of what the function does
-		public let description: String
-		/// JSON Schema defining the function's input parameters
-		public let parameters: [String: String]
-		
-		/// Creates a new function definition.
-		/// - Parameters:
-		///   - name: Unique function name
-		///   - description: Clear description of function purpose
-		///   - parameters: JSON Schema for function parameters
-		public init(name: String, description: String, parameters: [String: String]) {
-			self.name = name
-			self.description = description
-			self.parameters = parameters
-		}
-	}
-	
-	/// Creates a new tool definition.
 	/// - Parameters:
-	///   - type: Tool type (defaults to "function")
-	///   - function: Function definition for this tool
-	public init(type: String = "function", function: Function) {
+	///   - properties: Dictionary mapping property names to their schemas
+	///   - required: List of required property names (defaults to empty)
+	public static func object(
+		properties: [String: JSONSchemaValue],
+		required: [String] = []
+	) -> JSONSchemaValue {
+		.object(
+			properties: properties.sorted { $0.key < $1.key }.map { ($0.key, $0.value) },
+			required: required
+		)
+	}
+}
+
+// MARK: - Tool Call Types
+
+/// Represents a tool call returned by the model in a non-streaming response.
+public struct ToolCall: Codable, Sendable, Equatable {
+	/// Unique identifier for this tool call
+	public let id: String
+	/// The type of tool call (typically "function")
+	public let type: String
+	/// The function call details
+	public let function: FunctionCall
+
+	/// Creates a new ToolCall.
+	/// - Parameters:
+	///   - id: Unique identifier for this tool call
+	///   - type: The type of tool call (defaults to "function")
+	///   - function: The function call details
+	public init(id: String, type: String = "function", function: FunctionCall) {
+		self.id = id
 		self.type = type
 		self.function = function
 	}
+
+	/// Represents the function name and arguments in a tool call.
+	public struct FunctionCall: Codable, Sendable, Equatable {
+		/// The name of the function to call
+		public let name: String
+		/// The arguments as a raw JSON string
+		public let arguments: String
+
+		/// Creates a new FunctionCall.
+		/// - Parameters:
+		///   - name: The name of the function to call
+		///   - arguments: The arguments as a raw JSON string
+		public init(name: String, arguments: String) {
+			self.name = name
+			self.arguments = arguments
+		}
+	}
+
+	/// Decodes the raw JSON arguments into a typed Swift value.
+	/// - Parameter type: The Decodable type to decode into (can be inferred)
+	/// - Returns: The decoded value
+	/// - Throws: `LLMError.decodingFailed` if the arguments cannot be decoded
+	public func decodeArguments<T: Decodable>(_ type: T.Type = T.self) throws -> T {
+		guard let data = function.arguments.data(using: .utf8) else {
+			throw LLMError.decodingFailed("Tool call arguments are not valid UTF-8")
+		}
+		do {
+			return try JSONDecoder().decode(T.self, from: data)
+		} catch {
+			throw LLMError.decodingFailed("Failed to decode tool call arguments: \(error.localizedDescription)")
+		}
+	}
 }
+
+/// Represents an incremental tool call from a streaming delta.
+public struct ToolCallDelta: Codable, Sendable, Equatable {
+	/// Index of this tool call in the array
+	public let index: Int
+	/// Tool call ID (present in first chunk)
+	public let id: String?
+	/// Tool call type (present in first chunk)
+	public let type: String?
+	/// Incremental function call data
+	public let function: FunctionCallDelta?
+
+	/// Creates a new ToolCallDelta.
+	/// - Parameters:
+	///   - index: Index of this tool call in the array
+	///   - id: Tool call ID (present in first chunk)
+	///   - type: Tool call type (present in first chunk)
+	///   - function: Incremental function call data
+	public init(index: Int, id: String? = nil, type: String? = nil, function: FunctionCallDelta? = nil) {
+		self.index = index
+		self.id = id
+		self.type = type
+		self.function = function
+	}
+
+	/// Incremental function call data from a streaming delta.
+	public struct FunctionCallDelta: Codable, Sendable, Equatable {
+		/// Function name (present in first chunk)
+		public let name: String?
+		/// Incremental arguments string
+		public let arguments: String?
+
+		/// Creates a new FunctionCallDelta.
+		/// - Parameters:
+		///   - name: Function name (present in first chunk)
+		///   - arguments: Incremental arguments string
+		public init(name: String? = nil, arguments: String? = nil) {
+			self.name = name
+			self.arguments = arguments
+		}
+	}
+}
+
+/// Accumulates streaming `ToolCallDelta` chunks into complete `ToolCall` objects.
+///
+/// During streaming, tool calls arrive as incremental deltas with partial id, name,
+/// and argument fragments. `ToolCallAccumulator` handles the assembly logic so callers
+/// don't need to manually track and concatenate fragments.
+///
+/// ## Example Usage
+/// ```swift
+/// var accumulator = ToolCallAccumulator()
+/// for await delta in client.stream(request) {
+///     if let toolCallDeltas = delta.firstToolCallDeltas {
+///         for tcd in toolCallDeltas {
+///             accumulator.append(tcd)
+///         }
+///     }
+/// }
+/// let completedToolCalls = accumulator.toolCalls
+/// ```
+public struct ToolCallAccumulator: Sendable {
+	private var ids: [Int: String] = [:]
+	private var types: [Int: String] = [:]
+	private var names: [Int: String] = [:]
+	private var arguments: [Int: String] = [:]
+	private var maxIndex: Int = -1
+
+	/// Creates a new empty accumulator.
+	public init() {}
+
+	/// Appends a streaming tool call delta, merging it into the accumulated state.
+	/// - Parameter delta: The incremental tool call delta to accumulate
+	public mutating func append(_ delta: ToolCallDelta) {
+		let idx = delta.index
+		if idx > maxIndex { maxIndex = idx }
+
+		if let id = delta.id {
+			ids[idx] = id
+		}
+		if let type = delta.type {
+			types[idx] = type
+		}
+		if let fn = delta.function {
+			if let name = fn.name {
+				names[idx] = name
+			}
+			if let args = fn.arguments {
+				arguments[idx, default: ""].append(args)
+			}
+		}
+	}
+
+	/// The accumulated complete tool calls, ordered by index.
+	public var toolCalls: [ToolCall] {
+		guard maxIndex >= 0 else { return [] }
+		return (0...maxIndex).compactMap { idx in
+			guard let id = ids[idx], let name = names[idx] else { return nil }
+			return ToolCall(
+				id: id,
+				type: types[idx] ?? "function",
+				function: ToolCall.FunctionCall(
+					name: name,
+					arguments: arguments[idx] ?? ""
+				)
+			)
+		}
+	}
+
+	/// Resets the accumulator, clearing all accumulated state.
+	public mutating func reset() {
+		ids.removeAll()
+		types.removeAll()
+		names.removeAll()
+		arguments.removeAll()
+		maxIndex = -1
+	}
+}
+
+// MARK: - Tool Choice
+
+/// Controls how the model selects tools during generation.
+///
+/// ## Example Usage
+/// ```swift
+/// // Let the model decide
+/// ToolChoiceParam(.auto)
+///
+/// // Force a specific function
+/// ToolChoiceParam(.function("get_weather"))
+///
+/// // Require any tool call
+/// ToolChoiceParam(.required)
+/// ```
+public enum ToolChoice: Sendable, Equatable, Encodable {
+	/// Model decides whether to call a tool
+	case auto
+	/// Model will not call any tools
+	case none
+	/// Model must call at least one tool
+	case required
+	/// Model must call the specified function
+	case function(String)
+
+	public func encode(to encoder: Encoder) throws {
+		switch self {
+		case .auto:
+			var container = encoder.singleValueContainer()
+			try container.encode("auto")
+		case .none:
+			var container = encoder.singleValueContainer()
+			try container.encode("none")
+		case .required:
+			var container = encoder.singleValueContainer()
+			try container.encode("required")
+		case .function(let name):
+			var container = encoder.container(keyedBy: FunctionChoiceKeys.self)
+			try container.encode("function", forKey: .type)
+			try container.encode(["name": name], forKey: .function)
+		}
+	}
+
+	private enum FunctionChoiceKeys: String, CodingKey {
+		case type, function
+	}
+}
+
+/// Configuration parameter that sets the tool choice strategy for a request.
+public struct ToolChoiceParam: ChatConfigParameter {
+	/// The tool choice value
+	public let value: ToolChoice
+
+	/// Creates a tool choice configuration parameter.
+	/// - Parameter value: The tool choice strategy
+	public init(_ value: ToolChoice) {
+		self.value = value
+	}
+
+	public func apply(to request: inout ChatRequest) {
+		request.toolChoice = value
+	}
+}
+
+// MARK: - Tool Support
+
+/// Type alias for the macros package tool definition type.
+///
+/// `Tool` is an alias for `ToolDefinition` from `SwiftChatCompletionsMacros`.
+/// Use the flat initializer to create tools:
+///
+/// ```swift
+/// let weatherTool = Tool(
+///     name: "get_weather",
+///     description: "Get current weather information for a specific location",
+///     parameters: .object(
+///         properties: ["location": .string(description: "City name")],
+///         required: ["location"]
+///     )
+/// )
+/// ```
+public typealias Tool = ToolDefinition
 
 /// Configuration parameter that provides an array of tools the model can call during conversation.
 ///
@@ -1000,60 +1279,20 @@ public struct Tool: Codable, Sendable {
 /// ```swift
 /// // 1. Define available tools
 /// let tools = Tools([
-///     Tool(function: Tool.Function(
-///         name: "get_weather",
-///         description: "Get weather for a location",
-///         parameters: [/* schema */]
-///     )),
-///     Tool(function: Tool.Function(
-///         name: "calculate",
-///         description: "Perform calculations",
-///         parameters: [/* schema */]
-///     ))
+///     Tool(name: "get_weather", description: "Get weather for a location",
+///          parameters: .object(properties: ["location": .string(description: "City")], required: ["location"])),
+///     Tool(name: "calculate", description: "Perform calculations",
+///          parameters: .object(properties: ["expression": .string(description: "Math expression")], required: ["expression"]))
 /// ])
-/// 
+///
 /// // 2. Include tools in request
 /// let request = try ChatRequest(model: "gpt-4") {
 ///     tools
 /// } messages: {
 ///     TextMessage(role: .user, content: "What's the weather in Paris and what's 15 * 23?")
 /// }
-/// 
+///
 /// // 3. Model may call functions based on the query
-/// ```
-///
-/// ## Best Practices
-/// - **Clear descriptions**: Write detailed function descriptions for better tool selection
-/// - **Proper schemas**: Use accurate JSON schemas for parameters
-/// - **Error handling**: Handle function execution errors gracefully
-/// - **Security**: Validate all function parameters before execution
-/// - **Performance**: Consider caching for frequently called functions
-///
-/// ## Example Usage
-/// ```swift
-/// // Single tool
-/// Tools([weatherTool])
-/// 
-/// // Multiple related tools
-/// Tools([
-///     calculatorTool,
-///     weatherTool,
-///     searchTool
-/// ])
-/// 
-/// // Comprehensive tool set
-/// Tools([
-///     Tool(function: Tool.Function(
-///         name: "search_web",
-///         description: "Search the internet for current information",
-///         parameters: ["type": "object", "properties": "{\"query\": {\"type\": \"string\"}}"]
-///     )),
-///     Tool(function: Tool.Function(
-///         name: "get_stock_price",
-///         description: "Get current stock price for a symbol",
-///         parameters: ["type": "object", "properties": "{\"symbol\": {\"type\": \"string\"}}"]
-///     ))
-/// ])
 /// ```
 ///
 /// - Note: Tool calling requires model support and proper handling of function call responses.
@@ -1259,7 +1498,7 @@ public struct ChatBuilder {
 ///     try MaxTokens(300)
 ///     
 ///     if environment == "development" {
-///         try User("dev-user")
+///         try UserID("dev-user")
 ///         try N(3)                  // Multiple responses for comparison
 ///     }
 ///     
@@ -1277,7 +1516,7 @@ public struct ChatBuilder {
 ///     try Temperature(0.7)
 ///     
 ///     if let id = userID {
-///         try User(id)
+///         try UserID(id)
 ///     }
 /// }
 /// ```
@@ -1376,6 +1615,55 @@ public struct ChatConfigBuilder {
 	}
 }
 
+/// Result builder for composing tool arrays declaratively.
+///
+/// ``ToolsBuilder`` enables listing tools inline when constructing a ``ChatRequest``,
+/// supporting conditionals and loops just like other result builders in the DSL.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") {
+///     try Temperature(0.7)
+/// } tools: {
+///     Tool(function: Tool.Function(
+///         name: "get_weather",
+///         description: "Get weather for a city",
+///         parameters: .object(properties: ["city": .string()], required: ["city"])
+///     ))
+///     if enableCalculator {
+///         calculatorTool
+///     }
+/// } messages: {
+///     TextMessage(role: .user, content: "Hello")
+/// }
+/// ```
+@resultBuilder
+public struct ToolsBuilder {
+	public static func buildBlock(_ components: Tool...) -> [Tool] {
+		Array(components)
+	}
+
+	public static func buildEither(first: [Tool]) -> [Tool] {
+		first
+	}
+
+	public static func buildEither(second: [Tool]) -> [Tool] {
+		second
+	}
+
+	public static func buildOptional(_ component: [Tool]?) -> [Tool] {
+		component ?? []
+	}
+
+	public static func buildArray(_ components: [[Tool]]) -> [Tool] {
+		components.flatMap { $0 }
+	}
+
+	public static func buildLimitedAvailability(_ component: [Tool]) -> [Tool] {
+		component
+	}
+}
+
 // MARK: - Core Data Structures
 
 /// Represents a complete API request for chat completions with model, configuration, and messages.
@@ -1438,7 +1726,7 @@ public struct ChatConfigBuilder {
 ///     try MaxTokens(500)
 ///     try FrequencyPenalty(0.1)
 ///     try PresencePenalty(0.1)
-///     try User("user-123")
+///     try UserID("user-123")
 ///     try Stop(["END", "STOP"])
 /// } messages: {
 ///     TextMessage(role: .system, content: "Be creative but concise.")
@@ -1499,6 +1787,8 @@ public struct ChatRequest: Encodable, Sendable {
 	public var stop: [String]?
 	/// List of tools the model may call
 	public var tools: [Tool]?
+	/// Controls how the model selects tools
+	public var toolChoice: ToolChoice?
 	/// Request timeout for individual HTTP requests (in seconds)
 	public var requestTimeout: TimeInterval?
 	/// Resource timeout for complete resource loading (in seconds)
@@ -1634,7 +1924,74 @@ public struct ChatRequest: Encodable, Sendable {
 			parameter.apply(to: &self)
 		}
 	}
-	
+
+	/// Creates a chat request with inline tool definitions and optional tool choice.
+	///
+	/// Use this initializer when you want to declare tools alongside configuration
+	/// and messages in a single, readable call site.
+	///
+	/// ## Example Usage
+	/// ```swift
+	/// let request = try ChatRequest(model: "gpt-4", toolChoice: .auto) {
+	///     try Temperature(0.7)
+	/// } tools: {
+	///     Tool(function: Tool.Function(
+	///         name: "get_weather",
+	///         description: "Get weather for a city",
+	///         parameters: .object(
+	///             properties: ["city": .string(description: "City name")],
+	///             required: ["city"]
+	///         )
+	///     ))
+	/// } messages: {
+	///     TextMessage(role: .user, content: "What's the weather?")
+	/// }
+	/// ```
+	///
+	/// - Parameters:
+	///   - model: The model identifier (cannot be empty)
+	///   - stream: Whether to stream the response (defaults to false)
+	///   - toolChoice: Optional tool choice strategy
+	///   - config: Configuration parameters using ChatConfigBuilder
+	///   - tools: Tool definitions using ToolsBuilder
+	///   - messages: Messages using ChatBuilder
+	/// - Throws: ``LLMError/missingModel`` if model is empty, or parameter validation errors
+	public init(
+		model: String,
+		stream: Bool = false,
+		toolChoice: ToolChoice? = nil,
+		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+		@ToolsBuilder tools: () -> [Tool],
+		@ChatBuilder messages: () -> [any ChatMessage]
+	) throws {
+		try self.init(model: model, stream: stream, config: config, messages: messages())
+		self.tools = tools()
+		self.toolChoice = toolChoice
+	}
+
+	/// Creates a chat request with inline tool definitions and a pre-built message array.
+	///
+	/// - Parameters:
+	///   - model: The model identifier (cannot be empty)
+	///   - stream: Whether to stream the response (defaults to false)
+	///   - toolChoice: Optional tool choice strategy
+	///   - config: Configuration parameters using ChatConfigBuilder
+	///   - tools: Tool definitions using ToolsBuilder
+	///   - messages: Pre-built array of ChatMessage instances
+	/// - Throws: ``LLMError/missingModel`` if model is empty, or parameter validation errors
+	public init(
+		model: String,
+		stream: Bool = false,
+		toolChoice: ToolChoice? = nil,
+		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+		@ToolsBuilder tools: () -> [Tool],
+		messages: [any ChatMessage]
+	) throws {
+		try self.init(model: model, stream: stream, config: config, messages: messages)
+		self.tools = tools()
+		self.toolChoice = toolChoice
+	}
+
 	private enum CodingKeys: String, CodingKey {
 		case model
 		case messages
@@ -1649,18 +2006,19 @@ public struct ChatRequest: Encodable, Sendable {
 		case user
 		case stop
 		case tools
+		case toolChoice = "tool_choice"
 	}
-	
+
 	public func encode(to encoder: Encoder) throws {
 		var container = encoder.container(keyedBy: CodingKeys.self)
 		try container.encode(model, forKey: .model)
-		
+
 		// Encode messages directly using a container
 		var messagesContainer = container.nestedUnkeyedContainer(forKey: .messages)
 		for message in messages {
 			try messagesContainer.encode(AnyEncodableMessage(message))
 		}
-		
+
 		try container.encodeIfPresent(temperature, forKey: .temperature)
 		try container.encodeIfPresent(maxTokens, forKey: .maxTokens)
 		try container.encodeIfPresent(topP, forKey: .topP)
@@ -1672,6 +2030,7 @@ public struct ChatRequest: Encodable, Sendable {
 		try container.encodeIfPresent(user, forKey: .user)
 		try container.encodeIfPresent(stop, forKey: .stop)
 		try container.encodeIfPresent(tools, forKey: .tools)
+		try container.encodeIfPresent(toolChoice, forKey: .toolChoice)
 	}
 }
 
@@ -1911,6 +2270,22 @@ public struct ChatConversation {
 		history.removeAll()
 	}
 
+	/// Adds an assistant message with tool calls to the conversation history.
+	/// - Parameters:
+	///   - content: Optional text content alongside tool calls
+	///   - toolCalls: The tool calls from the model response
+	public mutating func addAssistantToolCalls(content: String?, toolCalls: [ToolCall]) {
+		add(message: AssistantToolCallMessage(content: content, toolCalls: toolCalls))
+	}
+
+	/// Adds a tool result message to the conversation history.
+	/// - Parameters:
+	///   - toolCallId: The ID of the tool call this result corresponds to
+	///   - content: The tool execution result
+	public mutating func addToolResult(toolCallId: String, content: String) {
+		add(message: ToolResultMessage(toolCallId: toolCallId, content: content))
+	}
+
 	/// Generates a ChatRequest using the conversation history plus optional additional messages.
 	///
 	/// This method combines the conversation history with optional additional messages
@@ -1954,6 +2329,62 @@ public struct ChatConversation {
 	}
 }
 
+// MARK: - Tool Message Types
+
+/// Represents an assistant message containing tool calls.
+///
+/// Use this message type when recording the assistant's tool call requests
+/// in conversation history for the tool-calling loop.
+public struct AssistantToolCallMessage: ChatMessage, Sendable {
+	/// The role is always `.assistant`
+	public let role: Role = .assistant
+	/// Optional text content alongside tool calls
+	public let content: String?
+	/// The tool calls requested by the assistant
+	public let toolCalls: [ToolCall]
+
+	/// Creates an assistant tool call message.
+	/// - Parameters:
+	///   - content: Optional text content
+	///   - toolCalls: The tool calls from the model response
+	public init(content: String?, toolCalls: [ToolCall]) {
+		self.content = content
+		self.toolCalls = toolCalls
+	}
+
+	private enum CodingKeys: String, CodingKey {
+		case role, content
+		case toolCalls = "tool_calls"
+	}
+}
+
+/// Represents a tool result message sent back to the model.
+///
+/// After executing a tool call, send the result back using this message type.
+public struct ToolResultMessage: ChatMessage, Sendable {
+	/// The role is always `.tool`
+	public let role: Role = .tool
+	/// The ID of the tool call this result corresponds to
+	public let toolCallId: String
+	/// The result content from the tool execution
+	public let content: String
+
+	/// Creates a tool result message.
+	/// - Parameters:
+	///   - toolCallId: The ID matching the original tool call
+	///   - content: The tool execution result
+	public init(toolCallId: String, content: String) {
+		self.toolCallId = toolCallId
+		self.content = content
+	}
+
+	private enum CodingKeys: String, CodingKey {
+		case role
+		case toolCallId = "tool_call_id"
+		case content
+	}
+}
+
 /// Response structure for non-streaming completions
 public struct ChatResponse: Decodable, Sendable {
 	public let id: String
@@ -1985,12 +2416,27 @@ public struct ChatResponse: Decodable, Sendable {
 	/// Represents a message in the API response.
 	///
 	/// Contains the role (typically "assistant") and the text content
-	/// generated by the model.
+	/// generated by the model. When the model returns tool calls, `content`
+	/// may be null in the API response; it decodes as `""` for source compatibility.
 	public struct Message: Decodable, Sendable {
 		/// The role of the message sender (typically "assistant" for responses)
 		public let role: Role
-		/// The text content of the message
+		/// The text content of the message (null from API decodes as empty string)
 		public let content: String
+		/// Tool calls requested by the model, if any
+		public let toolCalls: [ToolCall]?
+
+		private enum CodingKeys: String, CodingKey {
+			case role, content
+			case toolCalls = "tool_calls"
+		}
+
+		public init(from decoder: Decoder) throws {
+			let container = try decoder.container(keyedBy: CodingKeys.self)
+			role = try container.decode(Role.self, forKey: .role)
+			content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+			toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
+		}
 	}
 
 	/// Token usage statistics for the API request.
@@ -2056,6 +2502,13 @@ public struct ChatDelta: Decodable, Sendable {
 			public let content: String?
 			/// The role of the message (typically only present in the first delta)
 			public let role: Role?
+			/// Incremental tool call data, if any
+			public let toolCalls: [ToolCallDelta]?
+
+			private enum CodingKeys: String, CodingKey {
+				case content, role
+				case toolCalls = "tool_calls"
+			}
 		}
 	}
 }
@@ -2077,6 +2530,17 @@ extension ChatResponse {
 	public var totalTokens: Int {
 		usage?.totalTokens ?? 0
 	}
+
+	/// Returns the tool calls from the first choice, or nil if none.
+	public var firstToolCalls: [ToolCall]? {
+		choices.first?.message.toolCalls
+	}
+
+	/// Whether this response requires tool execution (model returned tool calls).
+	public var requiresToolExecution: Bool {
+		guard let toolCalls = firstToolCalls else { return false }
+		return !toolCalls.isEmpty
+	}
 }
 
 extension ChatDelta {
@@ -2088,6 +2552,11 @@ extension ChatDelta {
 	/// Returns the first choice's finish reason, or nil if not finished.
 	public var firstFinishReason: String? {
 		choices.first?.finishReason
+	}
+
+	/// Returns the tool call deltas from the first choice, or nil if none.
+	public var firstToolCallDeltas: [ToolCallDelta]? {
+		choices.first?.delta.toolCalls
 	}
 }
 
@@ -2209,7 +2678,6 @@ extension ChatDelta {
 /// - Custom API implementations
 ///
 /// The client handles authentication via Bearer token and expects standard JSON responses.
-@available(macOS 12.0, iOS 15.0, *)
 public actor LLMClient {
 	/// The base URL for the chat completions endpoint
 	private let baseURL: String
@@ -2653,3 +3121,4 @@ public actor LLMClient {
 		}
 	}
 }
+
