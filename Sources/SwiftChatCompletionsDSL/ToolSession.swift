@@ -147,7 +147,7 @@ public struct ToolSession: Sendable {
 		handlers: [String: ToolHandler]
 	) {
 		// Check for duplicate tool names
-		let names = tools.map(\.function.name)
+		let names = tools.map(\.name)
 		let duplicates = Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys
 		precondition(duplicates.isEmpty, "Duplicate tool names detected: \(duplicates.sorted().joined(separator: ", "))")
 
@@ -200,12 +200,12 @@ public struct ToolSession: Sendable {
 				messages.append(msg)
 			case .agentTool(let agentTool):
 				toolDefs.append(agentTool.tool)
-				toolHandlers[agentTool.tool.function.name] = agentTool.handler
+				toolHandlers[agentTool.tool.name] = agentTool.handler
 			}
 		}
 
 		// Check for duplicate tool names
-		let names = toolDefs.map(\.function.name)
+		let names = toolDefs.map(\.name)
 		let duplicates = Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys
 		precondition(duplicates.isEmpty, "Duplicate tool names detected: \(duplicates.sorted().joined(separator: ", "))")
 

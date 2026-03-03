@@ -26,7 +26,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 - **Type Safety**: Enforces roles, parameters, and responses at compile time
 - **Swift Concurrency**: Built with `async`/`await` and actors for thread-safe operations
 - **Value Types**: Uses structs for performance and immutability
-- **Zero Dependencies**: Core target has no external dependencies
+- **Macros Integration**: Core target depends on `SwiftChatCompletionsMacros`; `JSONSchema` and `Tool` are typealiases for macros types
 
 ### Key Components
 
@@ -115,12 +115,10 @@ Custom `LLMError` enum covers:
 ## Package Structure
 
 ### Products
-- **SwiftChatCompletionsDSL**: Core library (zero dependencies)
-- **SwiftChatCompletionsDSLMacros**: Bridge target connecting core DSL with SwiftChatCompletionsMacros
+- **SwiftChatCompletionsDSL**: Core library (depends on SwiftChatCompletionsMacros)
 
 ### Targets
-- **SwiftChatCompletionsDSL**: Core target (zero dependencies)
-- **SwiftChatCompletionsDSLMacros**: Bridge target (depends on core + SwiftChatCompletionsMacros package)
+- **SwiftChatCompletionsDSL**: Core target (depends on SwiftChatCompletionsMacros)
 - **SwiftChatCompletionsDSLTests**: Tests for core target
 
 ## Implementation Details
@@ -141,7 +139,8 @@ Custom `LLMError` enum covers:
 - Returns `AsyncThrowingStream<ChatDelta, Error>` for real-time content streaming
 
 ### Tool Calling
-- `Tool.Function.parameters` uses `JSONSchema` (deprecated `[String: String]` init preserved)
+- `Tool` is a typealias for `ToolDefinition` from `SwiftChatCompletionsMacros`; use `Tool(name:description:parameters:)` directly
+- `JSONSchema` is a typealias for `JSONSchemaValue` from `SwiftChatCompletionsMacros`; dict convenience `object(properties:[String:JSONSchemaValue], required:)` adds dictionary syntax
 - `ToolSession.ToolHandler` signature: `@Sendable (String) async throws -> String`
 - Parallel tool execution via `withThrowingTaskGroup` when API returns multiple tool_calls
 - `Agent` uses `ToolSession` internally for automatic tool-calling loops
@@ -150,11 +149,10 @@ Custom `LLMError` enum covers:
 - Duplicate tool name detection: `precondition` in `ToolSession`/`Agent` explicit init, `throws` in `Agent` builder init
 - `requiresToolExecution` checks only `firstToolCalls` (not `firstFinishReason`) for provider compatibility
 
-### Macros Bridge
-- `JSONSchema.init(from: JSONSchemaValue)` converts macros `JSONSchemaValue` → DSL `JSONSchema`
-- `Tool.init(from: ToolDefinition)` converts macros `ToolDefinition` → DSL `Tool`
-- `AgentTool.init<T: ChatCompletionsTool>(_ instance: T)` wraps macro-defined tools for Agent use
-- `Tools<T: ChatCompletionsTool>(_ instance: T) -> AgentTool` convenience for `@SessionBuilder` blocks
+### Macros Integration
+- `JSONSchema = JSONSchemaValue` (typealias) — no runtime conversion needed
+- `Tool = ToolDefinition` (typealias) — no runtime conversion needed
+- `AgentTool.init<T: ChatCompletionsTool>(_ instance: T)` wraps macro-defined tools for Agent use (defined in `Agent.swift`)
 
 ### Extensibility
 - Add custom message types by conforming to `ChatMessage`
@@ -198,8 +196,6 @@ Sources/SwiftChatCompletionsDSL/
 │   ├── Architecture.md                      # Technical architecture
 │   ├── DSL.md                               # DSL guide for beginners
 │   └── Usage.md                             # Usage examples
-Sources/SwiftChatCompletionsDSLMacros/
-├── MacrosBridge.swift                       # Bridge to SwiftChatCompletionsMacros
 Tests/SwiftChatCompletionsDSLTests/
 ├── SwiftChatCompletionsDSLTests.swift      # All test cases (120 tests)
 Spec/
@@ -217,4 +213,4 @@ Examples/
 │   └── SKILL.md
 ```
 
-The project follows Swift Package Manager conventions with core types in the main source file and tool orchestration (ToolSession, Agent) in separate files, plus a macros bridge target for SwiftChatCompletionsMacros integration.
+The project follows Swift Package Manager conventions with core types in the main source file and tool orchestration (ToolSession, Agent) in separate files. The core target depends directly on `SwiftChatCompletionsMacros`, with `JSONSchema` and `Tool` as typealiases for macros types.

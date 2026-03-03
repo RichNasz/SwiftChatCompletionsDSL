@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import SwiftChatCompletionsMacros
 
 // MARK: - Type Aliases
 
@@ -973,13 +974,11 @@ public struct ResourceTimeout: ChatConfigParameter {
 
 // MARK: - JSON Schema
 
-/// Type-safe JSON Schema representation for tool parameter definitions.
+/// Type alias for the macros package JSON Schema type.
 ///
-/// `JSONSchema` provides a Swift-native way to define JSON Schema objects
-/// that describe tool parameters. This replaces raw `[String: String]` dictionaries
-/// with compile-time type safety.
+/// `JSONSchema` is an alias for `JSONSchemaValue` from `SwiftChatCompletionsMacros`.
+/// Use the static factory methods to construct schemas:
 ///
-/// ## Example Usage
 /// ```swift
 /// let schema = JSONSchema.object(
 ///     properties: [
@@ -989,68 +988,25 @@ public struct ResourceTimeout: ChatConfigParameter {
 ///     required: ["location"]
 /// )
 /// ```
-public indirect enum JSONSchema: Sendable, Equatable, Encodable {
-	/// JSON Schema object type with named properties and required field list.
-	case object(properties: [String: JSONSchema], required: [String])
-	/// JSON Schema array type with a schema for array items.
-	case array(items: JSONSchema)
-	/// JSON Schema string type with optional description and enum constraint.
-	case string(description: String? = nil, enumValues: [String]? = nil)
-	/// JSON Schema integer type with optional description and range constraints.
-	case integer(description: String? = nil, minimum: Int? = nil, maximum: Int? = nil)
-	/// JSON Schema number type with optional description and range constraints.
-	case number(description: String? = nil, minimum: Double? = nil, maximum: Double? = nil)
-	/// JSON Schema boolean type with optional description.
-	case boolean(description: String? = nil)
-	/// JSON Schema null type.
-	case null
+public typealias JSONSchema = JSONSchemaValue
 
-	public func encode(to encoder: Encoder) throws {
-		var container = encoder.container(keyedBy: SchemaKeys.self)
-
-		switch self {
-		case .object(let properties, let required):
-			try container.encode("object", forKey: .type)
-			try container.encode(properties, forKey: .properties)
-			if !required.isEmpty {
-				try container.encode(required, forKey: .required)
-			}
-			try container.encode(false, forKey: .additionalProperties)
-
-		case .array(let items):
-			try container.encode("array", forKey: .type)
-			try container.encode(items, forKey: .items)
-
-		case .string(let description, let enumValues):
-			try container.encode("string", forKey: .type)
-			try container.encodeIfPresent(description, forKey: .description)
-			try container.encodeIfPresent(enumValues, forKey: .enumValues)
-
-		case .integer(let description, let minimum, let maximum):
-			try container.encode("integer", forKey: .type)
-			try container.encodeIfPresent(description, forKey: .description)
-			try container.encodeIfPresent(minimum, forKey: .minimum)
-			try container.encodeIfPresent(maximum, forKey: .maximum)
-
-		case .number(let description, let minimum, let maximum):
-			try container.encode("number", forKey: .type)
-			try container.encodeIfPresent(description, forKey: .description)
-			try container.encodeIfPresent(minimum, forKey: .minimum)
-			try container.encodeIfPresent(maximum, forKey: .maximum)
-
-		case .boolean(let description):
-			try container.encode("boolean", forKey: .type)
-			try container.encodeIfPresent(description, forKey: .description)
-
-		case .null:
-			try container.encode("null", forKey: .type)
-		}
-	}
-
-	private enum SchemaKeys: String, CodingKey {
-		case type, properties, required, additionalProperties, items
-		case description, minimum, maximum
-		case enumValues = "enum"
+extension JSONSchemaValue {
+	/// Creates an object schema from a dictionary of properties.
+	///
+	/// Properties are sorted alphabetically for deterministic encoding order.
+	/// This overload accepts Swift dictionary syntax alongside the native tuple-array form.
+	///
+	/// - Parameters:
+	///   - properties: Dictionary mapping property names to their schemas
+	///   - required: List of required property names (defaults to empty)
+	public static func object(
+		properties: [String: JSONSchemaValue],
+		required: [String] = []
+	) -> JSONSchemaValue {
+		.object(
+			properties: properties.sorted { $0.key < $1.key }.map { ($0.key, $0.value) },
+			required: required
+		)
 	}
 }
 
@@ -1291,135 +1247,45 @@ public struct ToolChoiceParam: ChatConfigParameter {
 	}
 }
 
-// MARK: - Tool Support (Future Extension)
+// MARK: - Tool Support
 
-/// Defines a tool that the model can call to perform actions or retrieve information.
+/// Type alias for the macros package tool definition type.
 ///
-/// Tools enable the AI model to interact with external systems, perform calculations,
-/// retrieve real-time data, or execute specific functions. This is an advanced feature
-/// that allows for more dynamic and interactive AI applications.
+/// `Tool` is an alias for `ToolDefinition` from `SwiftChatCompletionsMacros`.
+/// Use the flat initializer to create tools:
 ///
-/// ## Tool Types
-/// Currently, only "function" type tools are supported, which allow the model to call
-/// predefined functions with specific parameters and receive structured responses.
-///
-/// ## Function Tool Structure
-/// Each function tool must specify:
-/// - **Name**: Unique identifier for the function
-/// - **Description**: Clear explanation of what the function does
-/// - **Parameters**: Schema defining the expected input parameters
-///
-/// ## Example Usage
 /// ```swift
-/// let weatherTool = Tool(function: Tool.Function(
+/// let weatherTool = Tool(
 ///     name: "get_weather",
 ///     description: "Get current weather information for a specific location",
-///     parameters: [
-///         "type": "object",
-///         "properties": "{\"location\": {\"type\": \"string\", \"description\": \"City name\"}}",
-///         "required": "[\"location\"]"
-///     ]
-/// ))
-/// 
-/// let calculatorTool = Tool(function: Tool.Function(
-///     name: "calculate",
-///     description: "Perform basic mathematical calculations",
-///     parameters: [
-///         "type": "object",
-///         "properties": "{\"expression\": {\"type\": \"string\", \"description\": \"Math expression\"}}",
-///         "required": "[\"expression\"]"
-///     ]
-/// ))
+///     parameters: .object(
+///         properties: ["location": .string(description: "City name")],
+///         required: ["location"]
+///     )
+/// )
 /// ```
-///
-/// - Note: Tool calling requires appropriate model support and additional handling of tool responses.
-public struct Tool: Sendable, Encodable {
-	/// The type of tool (currently only "function" is supported)
-	public let type: String
-	/// The function definition for this tool
-	public let function: Function
-	
-	/// Represents a callable function with defined parameters and behavior.
-	///
-	/// Function tools allow the AI model to call external functions with structured parameters.
-	/// The model will generate function calls based on the conversation context and the function
-	/// descriptions provided.
-	///
-	/// ## Parameter Schema
-	/// The parameters dictionary should follow JSON Schema format to define:
-	/// - Parameter types (string, number, boolean, object, array)
-	/// - Required vs optional parameters
-	/// - Parameter descriptions and constraints
-	/// - Default values where applicable
-	///
-	/// ## Example Function Definitions
-	/// ```swift
-	/// // Simple function with one required parameter
-	/// Tool.Function(
-	///     name: "get_time",
-	///     description: "Get current time in specified timezone",
-	///     parameters: [
-	///         "type": "object",
-	///         "properties": "{\"timezone\": {\"type\": \"string\"}}",
-	///         "required": "[\"timezone\"]"
-	///     ]
-	/// )
-	/// 
-	/// // Complex function with multiple parameters
-	/// Tool.Function(
-	///     name: "send_email",
-	///     description: "Send an email to specified recipients",
-	///     parameters: [
-	///         "type": "object",
-	///         "properties": "{\"to\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"subject\": {\"type\": \"string\"}, \"body\": {\"type\": \"string\"}}",
-	///         "required": "[\"to\", \"subject\", \"body\"]"
-	///     ]
-	/// )
-	/// ```
-	public struct Function: Sendable, Encodable {
-		/// The name of the function (must be unique within the tool set)
-		public let name: String
-		/// Human-readable description of what the function does
-		public let description: String
-		/// JSON Schema defining the function's input parameters
-		public let parameters: JSONSchema
+public typealias Tool = ToolDefinition
 
-		/// Creates a new function definition with type-safe JSON Schema parameters.
-		/// - Parameters:
-		///   - name: Unique function name
-		///   - description: Clear description of function purpose
-		///   - parameters: JSON Schema for function parameters
-		public init(name: String, description: String, parameters: JSONSchema) {
-			self.name = name
-			self.description = description
-			self.parameters = parameters
-		}
+extension ToolDefinition {
+	/// The tool type, always "function" for OpenAI-compatible tool definitions.
+	public var type: String { "function" }
 
-		/// Creates a new function definition from a legacy string dictionary.
-		/// - Parameters:
-		///   - name: Unique function name
-		///   - description: Clear description of function purpose
-		///   - parameters: Legacy dictionary of parameter names to type strings
-		@available(*, deprecated, message: "Use JSONSchema-based parameters instead")
-		public init(name: String, description: String, parameters: [String: String]) {
-			self.name = name
-			self.description = description
-			// Convert [String: String] to JSONSchema.object with string properties
-			var properties: [String: JSONSchema] = [:]
-			for (key, value) in parameters {
-				properties[key] = .string(description: value)
-			}
-			self.parameters = .object(properties: properties, required: Array(parameters.keys).sorted())
-		}
-	}
-	
-	/// Creates a new tool definition.
+	/// Creates a tool from a legacy string-keyed parameters dictionary.
 	/// - Parameters:
-	///   - type: Tool type (defaults to "function")
-	///   - function: Function definition for this tool
-	public init(type: String = "function", function: Function) {
-		self.type = type
-		self.function = function
+	///   - name: Unique tool name
+	///   - description: Clear description of what the tool does
+	///   - parameters: Legacy dictionary mapping parameter names to descriptions
+	@available(*, deprecated, message: "Use JSONSchema-based parameters instead")
+	public init(name: String, description: String, parameters: [String: String]) {
+		var properties: [String: JSONSchemaValue] = [:]
+		for (key, value) in parameters {
+			properties[key] = .string(description: value)
+		}
+		self.init(
+			name: name,
+			description: description,
+			parameters: .object(properties: properties, required: Array(parameters.keys).sorted())
+		)
 	}
 }
 
@@ -1440,60 +1306,20 @@ public struct Tool: Sendable, Encodable {
 /// ```swift
 /// // 1. Define available tools
 /// let tools = Tools([
-///     Tool(function: Tool.Function(
-///         name: "get_weather",
-///         description: "Get weather for a location",
-///         parameters: [/* schema */]
-///     )),
-///     Tool(function: Tool.Function(
-///         name: "calculate",
-///         description: "Perform calculations",
-///         parameters: [/* schema */]
-///     ))
+///     Tool(name: "get_weather", description: "Get weather for a location",
+///          parameters: .object(properties: ["location": .string(description: "City")], required: ["location"])),
+///     Tool(name: "calculate", description: "Perform calculations",
+///          parameters: .object(properties: ["expression": .string(description: "Math expression")], required: ["expression"]))
 /// ])
-/// 
+///
 /// // 2. Include tools in request
 /// let request = try ChatRequest(model: "gpt-4") {
 ///     tools
 /// } messages: {
 ///     TextMessage(role: .user, content: "What's the weather in Paris and what's 15 * 23?")
 /// }
-/// 
+///
 /// // 3. Model may call functions based on the query
-/// ```
-///
-/// ## Best Practices
-/// - **Clear descriptions**: Write detailed function descriptions for better tool selection
-/// - **Proper schemas**: Use accurate JSON schemas for parameters
-/// - **Error handling**: Handle function execution errors gracefully
-/// - **Security**: Validate all function parameters before execution
-/// - **Performance**: Consider caching for frequently called functions
-///
-/// ## Example Usage
-/// ```swift
-/// // Single tool
-/// Tools([weatherTool])
-/// 
-/// // Multiple related tools
-/// Tools([
-///     calculatorTool,
-///     weatherTool,
-///     searchTool
-/// ])
-/// 
-/// // Comprehensive tool set
-/// Tools([
-///     Tool(function: Tool.Function(
-///         name: "search_web",
-///         description: "Search the internet for current information",
-///         parameters: ["type": "object", "properties": "{\"query\": {\"type\": \"string\"}}"]
-///     )),
-///     Tool(function: Tool.Function(
-///         name: "get_stock_price",
-///         description: "Get current stock price for a symbol",
-///         parameters: ["type": "object", "properties": "{\"symbol\": {\"type\": \"string\"}}"]
-///     ))
-/// ])
 /// ```
 ///
 /// - Note: Tool calling requires model support and proper handling of function call responses.

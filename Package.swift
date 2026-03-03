@@ -14,22 +14,14 @@ let package = Package(
 			name: "SwiftChatCompletionsDSL",
 			targets: ["SwiftChatCompletionsDSL"]
 		),
-		.library(
-			name: "SwiftChatCompletionsDSLMacros",
-			targets: ["SwiftChatCompletionsDSLMacros"]
-		),
 	],
 	dependencies: [
-		.package(url: "https://github.com/RichNasz/SwiftChatCompletionsMacros.git", from: "0.1.0"),
+		.package(url: "https://github.com/RichNasz/SwiftChatCompletionsMacros.git", from: "0.1.1"),
 	],
 	targets: [
 		.target(
-			name: "SwiftChatCompletionsDSL"
-		),
-		.target(
-			name: "SwiftChatCompletionsDSLMacros",
+			name: "SwiftChatCompletionsDSL",
 			dependencies: [
-				"SwiftChatCompletionsDSL",
 				.product(name: "SwiftChatCompletionsMacros", package: "SwiftChatCompletionsMacros"),
 			]
 		),

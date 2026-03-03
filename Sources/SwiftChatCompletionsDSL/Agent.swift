@@ -7,6 +7,7 @@
 //
 
 import Foundation
+import SwiftChatCompletionsMacros
 
 // MARK: - Agent
 
@@ -39,7 +40,26 @@ public struct AgentTool: Sendable {
 		self.tool = tool
 		self.handler = handler
 	}
+
+	/// Creates an AgentTool from a `ChatCompletionsTool` instance.
+	///
+	/// Bridges macro-generated tool types with the Agent system by wrapping
+	/// the tool's `call(arguments:)` method to handle JSON argument decoding.
+	///
+	/// - Parameter instance: An instance of the `ChatCompletionsTool`-conforming type
+	public init<T: ChatCompletionsTool>(_ instance: T) {
+		let definition = T.toolDefinition
+		self.init(tool: definition) { argumentsJSON in
+			guard let data = argumentsJSON.data(using: .utf8) else {
+				throw LLMError.decodingFailed("Failed to convert arguments to data")
+			}
+			let args = try JSONDecoder().decode(T.Arguments.self, from: data)
+			let output = try await instance.call(arguments: args)
+			return output.content
+		}
+	}
 }
+
 
 /// Result builder for declaratively registering tools with an Agent.
 ///
@@ -117,7 +137,7 @@ public actor Agent {
 
 	/// The names of all registered tools.
 	public var registeredToolNames: [String] {
-		tools.map(\.function.name)
+		tools.map(\.name)
 	}
 
 	/// The number of registered tools.
@@ -146,7 +166,7 @@ public actor Agent {
 		maxToolIterations: Int = 10
 	) {
 		// Check for duplicate tool names
-		let names = tools.map(\.function.name)
+		let names = tools.map(\.name)
 		let duplicates = Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys
 		precondition(duplicates.isEmpty, "Duplicate tool names detected: \(duplicates.sorted().joined(separator: ", "))")
 
@@ -187,7 +207,7 @@ public actor Agent {
 		let toolDefs = agentTools.map(\.tool)
 		var handlers: [String: ToolSession.ToolHandler] = [:]
 		for agentTool in agentTools {
-			let name = agentTool.tool.function.name
+			let name = agentTool.tool.name
 			if handlers[name] != nil {
 				throw LLMError.invalidValue("Duplicate tool name: '\(name)'")
 			}
@@ -255,7 +275,7 @@ public actor Agent {
 					otherMessages.append(msg)
 				}
 			case .agentTool(let agentTool):
-				let name = agentTool.tool.function.name
+				let name = agentTool.tool.name
 				if handlers[name] != nil {
 					throw LLMError.invalidValue("Duplicate tool name: '\(name)'")
 				}

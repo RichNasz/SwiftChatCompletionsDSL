@@ -229,7 +229,7 @@ func functionCallingExample() async throws {
 	)
 
 	// Define tools with type-safe JSONSchema parameters
-	let weatherTool = Tool(function: Tool.Function(
+	let weatherTool = Tool(
 		name: "get_weather",
 		description: "Get the current weather for a location",
 		parameters: .object(
@@ -239,9 +239,9 @@ func functionCallingExample() async throws {
 			],
 			required: ["location"]
 		)
-	))
+	)
 
-	let calculatorTool = Tool(function: Tool.Function(
+	let calculatorTool = Tool(
 		name: "calculate",
 		description: "Perform basic mathematical calculations",
 		parameters: .object(
@@ -250,7 +250,7 @@ func functionCallingExample() async throws {
 			],
 			required: ["expression"]
 		)
-	))
+	)
 
 	let request = try ChatRequest(model: "gpt-4o") {
 		try Temperature(0.1)
@@ -275,7 +275,7 @@ func toolSessionExample() async throws {
 		apiKey: "your-api-key-here"
 	)
 
-	let weatherTool = Tool(function: Tool.Function(
+	let weatherTool = Tool(
 		name: "get_weather",
 		description: "Get weather for a location",
 		parameters: .object(
@@ -284,7 +284,7 @@ func toolSessionExample() async throws {
 			],
 			required: ["location"]
 		)
-	))
+	)
 
 	// ToolSession handles the send → tool_calls → execute → results → repeat loop
 	let session = ToolSession(
@@ -322,14 +322,14 @@ func agentExample() async throws {
 		try Temperature(0.7)
 	} tools: {
 		AgentTool(
-			tool: Tool(function: Tool.Function(
+			tool: Tool(
 				name: "get_weather",
 				description: "Get weather for a location",
 				parameters: .object(
 					properties: ["location": .string(description: "City name")],
 					required: ["location"]
 				)
-			))
+			)
 		) { arguments in
 			return "{\"temperature\": 72, \"condition\": \"sunny\"}"
 		}
@@ -380,7 +380,7 @@ func multiToolAgentExample() async throws {
 	} tools: {
 		// Tool 1: Weather lookup
 		AgentTool(
-			tool: Tool(function: Tool.Function(
+			tool: Tool(
 				name: "get_weather",
 				description: "Get current weather for a city",
 				parameters: .object(
@@ -393,7 +393,7 @@ func multiToolAgentExample() async throws {
 					],
 					required: ["city"]
 				)
-			))
+			)
 		) { arguments in
 			let args = try JSONDecoder().decode(
 				[String: String].self,
@@ -408,7 +408,7 @@ func multiToolAgentExample() async throws {
 
 		// Tool 2: Calendar lookup
 		AgentTool(
-			tool: Tool(function: Tool.Function(
+			tool: Tool(
 				name: "get_calendar_events",
 				description: "Get calendar events for a specific date",
 				parameters: .object(
@@ -417,7 +417,7 @@ func multiToolAgentExample() async throws {
 					],
 					required: ["date"]
 				)
-			))
+			)
 		) { arguments in
 			// Simulate calendar API response
 			return """
@@ -431,7 +431,7 @@ func multiToolAgentExample() async throws {
 
 		// Tool 3: Restaurant search
 		AgentTool(
-			tool: Tool(function: Tool.Function(
+			tool: Tool(
 				name: "search_restaurants",
 				description: "Search for restaurants near a location",
 				parameters: .object(
@@ -442,7 +442,7 @@ func multiToolAgentExample() async throws {
 					],
 					required: ["location"]
 				)
-			))
+			)
 		) { arguments in
 			// Simulate restaurant search response
 			return """
@@ -510,7 +510,7 @@ func multiAgentOrchestrationExample() async throws {
 		try MaxTokens(300)
 	} tools: {
 		AgentTool(
-			tool: Tool(function: Tool.Function(
+			tool: Tool(
 				name: "search_knowledge_base",
 				description: "Search an internal knowledge base for information",
 				parameters: .object(
@@ -523,7 +523,7 @@ func multiAgentOrchestrationExample() async throws {
 					],
 					required: ["query"]
 				)
-			))
+			)
 		) { arguments in
 			return """
 				{"results": [
@@ -548,7 +548,7 @@ func multiAgentOrchestrationExample() async throws {
 		try MaxTokens(500)
 	} tools: {
 		AgentTool(
-			tool: Tool(function: Tool.Function(
+			tool: Tool(
 				name: "run_code",
 				description: "Execute a Swift code snippet and return the output",
 				parameters: .object(
@@ -557,7 +557,7 @@ func multiAgentOrchestrationExample() async throws {
 					],
 					required: ["code"]
 				)
-			))
+			)
 		) { arguments in
 			// Simulate code execution
 			return """
@@ -566,7 +566,7 @@ func multiAgentOrchestrationExample() async throws {
 		}
 
 		AgentTool(
-			tool: Tool(function: Tool.Function(
+			tool: Tool(
 				name: "analyze_complexity",
 				description: "Analyze the time and space complexity of a code snippet",
 				parameters: .object(
@@ -575,7 +575,7 @@ func multiAgentOrchestrationExample() async throws {
 					],
 					required: ["code"]
 				)
-			))
+			)
 		) { arguments in
 			return """
 				{"time_complexity": "O(n log n)", "space_complexity": "O(n)", "notes": "Dominated by the sorting step"}

@@ -8,6 +8,7 @@
 
 import Foundation
 import Testing
+import SwiftChatCompletionsMacros
 @testable import SwiftChatCompletionsDSL
 
 // MARK: - Basic ChatRequest Tests
@@ -313,33 +314,32 @@ import Testing
 // MARK: - Tool Support Tests
 
 @Test func testToolStructure() throws {
-    let function = Tool.Function(
+    let tool = Tool(
         name: "get_weather",
         description: "Get the current weather",
         parameters: ["location": "string"]
     )
-    let tool = Tool(function: function)
-    
+
     #expect(tool.type == "function")
-    #expect(tool.function.name == "get_weather")
-    #expect(tool.function.description == "Get the current weather")
+    #expect(tool.name == "get_weather")
+    #expect(tool.description == "Get the current weather")
 }
 
 @Test func testToolsParameter() throws {
-    let tool = Tool(function: Tool.Function(
+    let tool = Tool(
         name: "calculate",
         description: "Perform calculation",
         parameters: ["expression": "string"]
-    ))
-    
+    )
+
     let request = try ChatRequest(model: "test-model", config: {
         Tools([tool])
     }, messages: [
         TextMessage(role: .user, content: "Calculate 2+2")
     ])
-    
+
     #expect(request.tools?.count == 1)
-    #expect(request.tools?[0].function.name == "calculate")
+    #expect(request.tools?[0].name == "calculate")
 }
 
 // MARK: - Custom Message Extension Test
@@ -732,7 +732,7 @@ import Testing
 // MARK: - Tool Encoding Tests
 
 @Test func testToolEncoding() throws {
-    let function = Tool.Function(
+    let tool = Tool(
         name: "get_weather",
         description: "Get weather for a location",
         parameters: .object(
@@ -743,7 +743,6 @@ import Testing
             required: ["location"]
         )
     )
-    let tool = Tool(function: function)
 
     let encoder = JSONEncoder()
     let data = try encoder.encode(tool)
@@ -1542,7 +1541,7 @@ struct AllNetworkTests {
 // MARK: - Tool with JSONSchema Tests
 
 @Test func testToolWithJSONSchema() throws {
-    let tool = Tool(function: Tool.Function(
+    let tool = Tool(
         name: "search",
         description: "Search the web",
         parameters: .object(
@@ -1552,7 +1551,7 @@ struct AllNetworkTests {
             ],
             required: ["query"]
         )
-    ))
+    )
 
     let data = try JSONEncoder().encode(tool)
     let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -1572,20 +1571,21 @@ struct AllNetworkTests {
     #expect(limit?["maximum"] as? Int == 100)
 }
 
-// MARK: - Deprecated Tool.Function Backward Compat Test
+// MARK: - Deprecated Tool [String:String] Backward Compat Test
 
 @Test func testDeprecatedToolFunctionInit() throws {
-    let function = Tool.Function(
+    let tool = Tool(
         name: "test",
         description: "Test function",
         parameters: ["param1": "description1"]
     )
 
     // Should convert to JSONSchema.object
-    let data = try JSONEncoder().encode(function)
+    let data = try JSONEncoder().encode(tool)
     let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
 
-    let params = json?["parameters"] as? [String: Any]
+    let function = json?["function"] as? [String: Any]
+    let params = function?["parameters"] as? [String: Any]
     #expect(params?["type"] as? String == "object")
 }
 
@@ -1645,23 +1645,17 @@ struct AllNetworkTests {
     let request = try ChatRequest(model: "gpt-4", toolChoice: .auto) {
         try Temperature(0.7)
     } tools: {
-        Tool(function: Tool.Function(
-            name: "get_weather",
-            description: "Get weather",
-            parameters: .object(properties: ["city": .string()], required: ["city"])
-        ))
-        Tool(function: Tool.Function(
-            name: "calculate",
-            description: "Calculate",
-            parameters: .object(properties: ["expr": .string()], required: ["expr"])
-        ))
+        Tool(name: "get_weather", description: "Get weather",
+             parameters: .object(properties: ["city": .string()], required: ["city"]))
+        Tool(name: "calculate", description: "Calculate",
+             parameters: .object(properties: ["expr": .string()], required: ["expr"]))
     } messages: {
         TextMessage(role: .user, content: "Hello")
     }
 
     #expect(request.tools?.count == 2)
-    #expect(request.tools?[0].function.name == "get_weather")
-    #expect(request.tools?[1].function.name == "calculate")
+    #expect(request.tools?[0].name == "get_weather")
+    #expect(request.tools?[1].name == "calculate")
     #expect(request.toolChoice == .auto)
 }
 
@@ -1670,11 +1664,11 @@ struct AllNetworkTests {
         TextMessage(role: .user, content: "Hello"),
     ]
 
-    let searchTool = Tool(function: Tool.Function(
+    let searchTool = Tool(
         name: "search",
         description: "Search",
         parameters: .object(properties: ["q": .string()], required: ["q"])
-    ))
+    )
 
     var request = try ChatRequest(model: "gpt-4", messages: messages)
     request.tools = [searchTool]
@@ -1687,11 +1681,8 @@ struct AllNetworkTests {
 @Test func testChatRequestToolsBuilderEncoding() throws {
     let request = try ChatRequest(model: "gpt-4", toolChoice: .required) {
     } tools: {
-        Tool(function: Tool.Function(
-            name: "test_tool",
-            description: "A test tool",
-            parameters: .object(properties: [:], required: [])
-        ))
+        Tool(name: "test_tool", description: "A test tool",
+             parameters: .object(properties: [:], required: []))
     } messages: {
         TextMessage(role: .user, content: "Test")
     }
@@ -1851,11 +1842,8 @@ struct AllNetworkTests {
 }
 
 @Test func testSessionBuilderMixed() {
-    let tool = Tool(function: Tool.Function(
-        name: "test_tool",
-        description: "A test tool",
-        parameters: .object(properties: [:], required: [])
-    ))
+    let tool = Tool(name: "test_tool", description: "A test tool",
+                    parameters: .object(properties: [:], required: []))
 
     @SessionBuilder func build() -> [SessionComponent] {
         System("You are helpful.")
@@ -1868,7 +1856,7 @@ struct AllNetworkTests {
         #expect(Bool(false), "Expected .message")
     }
     if case .agentTool(let at) = components[1] {
-        #expect(at.tool.function.name == "test_tool")
+        #expect(at.tool.name == "test_tool")
     } else {
         #expect(Bool(false), "Expected .agentTool")
     }
@@ -1995,16 +1983,10 @@ struct AllNetworkTests {
         sessionConfiguration: config
     )
 
-    let tool1 = Tool(function: Tool.Function(
-        name: "tool_a",
-        description: "Tool A",
-        parameters: .object(properties: [:], required: [])
-    ))
-    let tool2 = Tool(function: Tool.Function(
-        name: "tool_b",
-        description: "Tool B",
-        parameters: .object(properties: [:], required: [])
-    ))
+    let tool1 = Tool(name: "tool_a", description: "Tool A",
+                     parameters: .object(properties: [:], required: []))
+    let tool2 = Tool(name: "tool_b", description: "Tool B",
+                     parameters: .object(properties: [:], required: []))
 
     let agent = Agent(
         client: client,
@@ -2029,11 +2011,8 @@ struct AllNetworkTests {
         sessionConfiguration: config
     )
 
-    let tool = Tool(function: Tool.Function(
-        name: "duplicate_tool",
-        description: "Test",
-        parameters: .object(properties: [:], required: [])
-    ))
+    let tool = Tool(name: "duplicate_tool", description: "Test",
+                    parameters: .object(properties: [:], required: []))
 
     #expect(throws: LLMError.self) {
         _ = try Agent(client: client, model: "gpt-4") {
@@ -2132,14 +2111,14 @@ struct ToolSessionTests {
             sessionConfiguration: config
         )
 
-        let tool = Tool(function: Tool.Function(
+        let tool = Tool(
             name: "get_weather",
             description: "Get weather",
             parameters: .object(
                 properties: ["location": .string(description: "City")],
                 required: ["location"]
             )
-        ))
+        )
 
         let session = ToolSession(
             client: client,
@@ -2226,11 +2205,11 @@ struct ToolSessionTests {
             sessionConfiguration: config
         )
 
-        let tool = Tool(function: Tool.Function(
+        let tool = Tool(
             name: "get_weather",
             description: "Get weather",
             parameters: .object(properties: ["location": .string()], required: ["location"])
-        ))
+        )
 
         let session = ToolSession(
             client: client,
@@ -2290,11 +2269,8 @@ struct ToolSessionTests {
             sessionConfiguration: config
         )
 
-        let tool = Tool(function: Tool.Function(
-            name: "loop_tool",
-            description: "Always loops",
-            parameters: .object(properties: [:], required: [])
-        ))
+        let tool = Tool(name: "loop_tool", description: "Always loops",
+                        parameters: .object(properties: [:], required: []))
 
         let session = ToolSession(
             client: client,
@@ -2356,11 +2332,8 @@ struct ToolSessionTests {
             sessionConfiguration: config
         )
 
-        let tool = Tool(function: Tool.Function(
-            name: "known_tool",
-            description: "Known",
-            parameters: .object(properties: [:], required: [])
-        ))
+        let tool = Tool(name: "known_tool", description: "Known",
+                        parameters: .object(properties: [:], required: []))
 
         let session = ToolSession(
             client: client,
@@ -2421,11 +2394,8 @@ struct ToolSessionTests {
             sessionConfiguration: config
         )
 
-        let tool = Tool(function: Tool.Function(
-            name: "failing_tool",
-            description: "Always fails",
-            parameters: .object(properties: [:], required: [])
-        ))
+        let tool = Tool(name: "failing_tool", description: "Always fails",
+                        parameters: .object(properties: [:], required: []))
 
         struct ToolError: Error, LocalizedError {
             var errorDescription: String? { "Something went wrong" }
@@ -2491,11 +2461,8 @@ struct ToolSessionTests {
             sessionConfiguration: config
         )
 
-        let tool = Tool(function: Tool.Function(
-            name: "loop_tool",
-            description: "Always loops",
-            parameters: .object(properties: [:], required: [])
-        ))
+        let tool = Tool(name: "loop_tool", description: "Always loops",
+                        parameters: .object(properties: [:], required: []))
 
         let session = ToolSession(
             client: client,
@@ -2580,14 +2547,14 @@ struct AgentTests {
             sessionConfiguration: config
         )
 
-        let addTool = Tool(function: Tool.Function(
+        let addTool = Tool(
             name: "add",
             description: "Add two numbers",
             parameters: .object(
                 properties: ["a": .integer(), "b": .integer()],
                 required: ["a", "b"]
             )
-        ))
+        )
 
         let agent = Agent(
             client: client,
@@ -2822,14 +2789,14 @@ struct DeclarativeInitTests {
             sessionConfiguration: config
         )
 
-        let weatherTool = Tool(function: Tool.Function(
+        let weatherTool = Tool(
             name: "get_weather",
             description: "Get weather",
             parameters: .object(
                 properties: ["location": .string(description: "City")],
                 required: ["location"]
             )
-        ))
+        )
 
         let session = ToolSession(client: client, model: "gpt-4") {
             System("You are a weather assistant.")
@@ -2903,11 +2870,8 @@ struct DeclarativeInitTests {
             sessionConfiguration: config
         )
 
-        let tool = Tool(function: Tool.Function(
-            name: "calc",
-            description: "Calculate",
-            parameters: .object(properties: [:], required: [])
-        ))
+        let tool = Tool(name: "calc", description: "Calculate",
+                        parameters: .object(properties: [:], required: []))
 
         let agent = try Agent(client: client, model: "gpt-4") {
             System("You are a calculator.")
