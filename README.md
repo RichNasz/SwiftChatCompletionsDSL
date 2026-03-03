@@ -3,6 +3,7 @@
 [![Swift 6.2+](https://img.shields.io/badge/Swift-6.2+-orange.svg)](https://swift.org)
 [![Platforms](https://img.shields.io/badge/Platforms-macOS%2013.0+%20|%20iOS%2016.0+-blue.svg)](https://swift.org)
 [![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
+[![Claude Code](https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet.svg)](https://claude.ai/code)
 
 > The only zero-dependency SwiftUI-style DSL with built-in Apple-native tool calling for any OpenAI-compatible backend
 
