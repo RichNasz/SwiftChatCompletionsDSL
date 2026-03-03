@@ -57,6 +57,27 @@ extension Tool {
 	}
 }
 
+// MARK: - Tools Convenience Function
+
+/// Creates an `AgentTool` from a `ChatCompletionsTool` instance for use in `@SessionBuilder` blocks.
+///
+/// This convenience function enables Apple FoundationModels-style tool registration
+/// when using the macros bridge.
+///
+/// ## Example Usage
+/// ```swift
+/// let agent = try Agent(client: client, model: "gpt-4") {
+///     System("You are a helpful assistant.")
+///     Tools(GetCurrentWeather())
+/// }
+/// ```
+///
+/// - Parameter instance: An instance of the `ChatCompletionsTool`-conforming type
+/// - Returns: An `AgentTool` wrapping the tool instance
+public func Tools<T: ChatCompletionsTool>(_ instance: T) -> AgentTool {
+	AgentTool(instance)
+}
+
 // MARK: - AgentTool Conversion
 
 extension AgentTool {

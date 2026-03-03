@@ -211,6 +211,81 @@ public actor Agent {
 		}
 	}
 
+	/// Creates a new Agent with declarative `@SessionBuilder` configuration.
+	///
+	/// Uses `@SessionBuilder` to accept both messages and tools in a single block.
+	/// The first system message found in the components is used as the system prompt.
+	///
+	/// ## Example Usage
+	/// ```swift
+	/// let agent = try Agent(client: client, model: "gpt-4") {
+	///     System("You are a helpful assistant.")
+	///     AgentTool(tool: weatherTool) { args in
+	///         return "{\"temperature\": 72}"
+	///     }
+	/// }
+	///
+	/// let response = try await agent.run("What's the weather?")
+	/// ```
+	///
+	/// - Parameters:
+	///   - client: The LLM client to use
+	///   - model: The model identifier
+	///   - maxToolIterations: Maximum tool-calling loop iterations (default: 10)
+	///   - configure: A `@SessionBuilder` block containing messages and tools
+	/// - Throws: `LLMError.invalidValue` if duplicate tool names are detected
+	public init(
+		client: LLMClient,
+		model: String,
+		maxToolIterations: Int = 10,
+		@SessionBuilder configure: () -> [SessionComponent]
+	) throws {
+		let components = configure()
+		var systemMessages: [String] = []
+		var otherMessages: [any ChatMessage] = []
+		var toolDefs: [Tool] = []
+		var handlers: [String: ToolSession.ToolHandler] = [:]
+
+		for component in components {
+			switch component {
+			case .message(let msg):
+				if msg.role == .system, let textMsg = msg as? TextMessage {
+					systemMessages.append(textMsg.content)
+				} else {
+					otherMessages.append(msg)
+				}
+			case .agentTool(let agentTool):
+				let name = agentTool.tool.function.name
+				if handlers[name] != nil {
+					throw LLMError.invalidValue("Duplicate tool name: '\(name)'")
+				}
+				toolDefs.append(agentTool.tool)
+				handlers[name] = agentTool.handler
+			}
+		}
+
+		self.client = client
+		self.model = model
+		self.tools = toolDefs
+		self.toolChoice = nil
+		self.toolHandlers = handlers
+		self.configParams = []
+		self.maxToolIterations = maxToolIterations
+
+		if let systemPrompt = systemMessages.first {
+			self.conversation = ChatConversation {
+				TextMessage(role: .system, content: systemPrompt)
+			}
+		} else {
+			self.conversation = ChatConversation()
+		}
+
+		// Add any non-system messages to conversation
+		for msg in otherMessages {
+			self.conversation.add(message: msg)
+		}
+	}
+
 	/// Sends a user message and returns the assistant's response.
 	///
 	/// If the model requests tool calls, they are automatically executed
@@ -274,6 +349,18 @@ public actor Agent {
 		conversation.addAssistant(content: content)
 		_transcript.append(.assistantMessage(content))
 		return content
+	}
+
+	/// Sends a user message and returns the assistant's response.
+	///
+	/// This is a convenience alias for ``send(_:)`` that provides
+	/// Apple FoundationModels-style naming.
+	///
+	/// - Parameter message: The user's message text
+	/// - Returns: The assistant's text response
+	/// - Throws: `LLMError` for API or tool execution failures
+	public func run(_ message: String) async throws -> String {
+		try await send(message)
 	}
 
 	/// Resets the agent's conversation history and transcript.

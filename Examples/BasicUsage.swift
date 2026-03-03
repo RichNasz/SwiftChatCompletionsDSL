@@ -66,7 +66,7 @@ func basicStreamingExample() async throws {
 	let request = try ChatRequest(model: "gpt-4o", stream: true) {
 		try Temperature(0.8)
 		try MaxTokens(200)
-		try User("example-user")
+		try UserID("example-user")
 	} messages: {
 		TextMessage(role: .system, content: "You are a creative writing assistant.")
 		TextMessage(role: .user, content: "Write a short story about a robot learning to paint.")
@@ -117,7 +117,7 @@ func advancedConfigurationExample() async throws {
 		try N(1)
 		LogitBias(["AI": 2, "robot": -1]) // Boost "AI", reduce "robot"
 		try Stop(["\n\n", "THE END"])
-		try User("advanced-user")
+		try UserID("advanced-user")
 	} messages: {
 		TextMessage(role: .system, content: "You are a technical documentation writer.")
 		TextMessage(role: .user, content: "Explain dependency injection in iOS development.")

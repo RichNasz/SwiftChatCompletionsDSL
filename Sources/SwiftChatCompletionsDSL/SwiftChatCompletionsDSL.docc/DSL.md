@@ -180,7 +180,7 @@ let contextualRequest = try ChatRequest(model: "gpt-4") {
 let conversationRequest = try ChatRequest(model: "gpt-4") {
     try Temperature(0.7)
     try MaxTokens(200)
-    try User("student-123")   // Track user for analytics
+    try UserID("student-123")   // Track user for analytics
 } messages: {
     TextMessage(role: .system, content: "You are a patient tutor.")
     TextMessage(role: .user, content: "I don't understand functions in programming.")

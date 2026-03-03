@@ -36,7 +36,7 @@ let request = try ChatRequest(model: "gpt-4") {
     try MaxTokens(150)
 } messages: {
     System("You are helpful")
-    UserMessage("Explain Swift")
+    User("Explain Swift")
 }
 ```
 
@@ -86,7 +86,7 @@ let request = try ChatRequest(model: "gpt-4") {
     try MaxTokens(150)
 } messages: {
     System("You are a helpful assistant.")
-    UserMessage("Explain async/await in Swift.")
+    User("Explain async/await in Swift.")
 }
 
 let response = try await client.complete(request)
@@ -165,7 +165,7 @@ let request = try ChatRequest(model: "gpt-4o", toolChoice: .auto) {
     calculatorTool
 } messages: {
     System("You are a helpful assistant.")
-    UserMessage("What's the weather in Paris?")
+    User("What's the weather in Paris?")
 }
 ```
 
@@ -183,33 +183,63 @@ if response.requiresToolExecution, let toolCalls = response.firstToolCalls {
 }
 ```
 
-### ToolSession — Automatic Tool Execution
+### ToolSession — Declarative Style
 
-`ToolSession` handles the entire tool-calling loop automatically: send request, parse tool_calls, execute handlers in parallel, send results back, repeat until final response.
+`ToolSession` handles the entire tool-calling loop automatically. The declarative init uses `@SessionBuilder` to mix system messages and tools in one block:
+
+```swift
+let session = ToolSession(client: client, model: "gpt-4o") {
+    System("You are a weather assistant.")
+    AgentTool(tool: weatherTool) { arguments in
+        return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    }
+}
+
+let result = try await session.run("What's the weather in Paris?")
+print(result.response.firstContent ?? "")  // "The weather in Paris is 72°F and sunny."
+```
+
+<details>
+<summary>Explicit init (alternative)</summary>
 
 ```swift
 let session = ToolSession(
     client: client,
     tools: [weatherTool],
     handlers: ["get_weather": { arguments in
-        // Parse arguments JSON, call your API, return result
         return "{\"temperature\": 72, \"condition\": \"sunny\"}"
     }]
 )
 
 let result = try await session.run(
     model: "gpt-4o",
-    messages: [UserMessage("What's the weather in Paris?")]
+    messages: [User("What's the weather in Paris?")]
 )
-
-print(result.response.firstContent ?? "")  // "The weather in Paris is 72°F and sunny."
-print("Tool calls: \(result.log.count)")
-print("Iterations: \(result.iterations)")
 ```
+</details>
 
 ### Agent — Persistent Conversations with Tools
 
 `Agent` is an actor that manages conversation history, automatically executes tools via `ToolSession`, and maintains a debugging transcript.
+
+```swift
+let agent = try Agent(client: client, model: "gpt-4o") {
+    System("You are a helpful assistant with weather data access.")
+    AgentTool(tool: weatherTool) { arguments in
+        return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+    }
+}
+
+// Multi-turn — agent remembers history automatically
+let response1 = try await agent.run("What's the weather in Paris?")
+print(response1)  // "The weather in Paris is 72°F and sunny."
+
+let response2 = try await agent.run("How about London?")
+print(response2)  // "The weather in London is..."
+```
+
+<details>
+<summary>Explicit init (alternative)</summary>
 
 ```swift
 let agent = try Agent(
@@ -224,14 +254,13 @@ let agent = try Agent(
     }
 }
 
-// Multi-turn — agent remembers history automatically
-let response1 = try await agent.send("What's the weather in Paris?")
-print(response1)  // "The weather in Paris is 72°F and sunny."
+let response = try await agent.send("What's the weather in Paris?")
+```
+</details>
 
-let response2 = try await agent.send("How about London?")
-print(response2)  // "The weather in London is..."
+#### Transcript Inspection
 
-// Inspect the transcript for debugging
+```swift
 for entry in await agent.transcript {
     switch entry {
     case .userMessage(let msg):      print("[User] \(msg)")
@@ -254,7 +283,7 @@ let request = try ChatRequest(model: "gpt-4", stream: true) {
     try Temperature(0.8)
     try MaxTokens(200)
 } messages: {
-    UserMessage("Write a haiku about Swift.")
+    User("Write a haiku about Swift.")
 }
 
 for try await delta in client.stream(request) {
@@ -333,7 +362,7 @@ Products:
 Targets:
   SwiftChatCompletionsDSL          # Core (Foundation only)
   SwiftChatCompletionsDSLMacros    # Bridge target
-  SwiftChatCompletionsDSLTests     # 98 tests
+  SwiftChatCompletionsDSLTests     # 120 tests
 ```
 
 ## Requirements

@@ -303,13 +303,37 @@ public func System(_ content: String) -> TextMessage {
 /// }
 /// ```
 ///
-/// - Note: Named `UserMessage` to avoid conflict with the ``User`` configuration parameter.
-///   In `@ChatBuilder` blocks use `UserMessage("...")`, in `@ChatConfigBuilder` blocks use `try User("user-id")`.
+/// - Note: ``User(_:)-95r48`` is the preferred shorthand. `UserMessage` is retained for compatibility.
 ///
 /// - Parameter content: The user message text
 /// - Returns: A ``TextMessage`` with role `.user`
 @inlinable
 public func UserMessage(_ content: String) -> TextMessage {
+	TextMessage(role: .user, content: content)
+}
+
+/// Creates a user message with the given content.
+///
+/// Apple FoundationModels-style shorthand for `TextMessage(role: .user, content: content)`.
+/// This function coexists with the ``User`` configuration struct because Swift resolves
+/// overloads by return type: in `@ChatBuilder` context (expecting `any ChatMessage`)
+/// only this function matches, while in `@ChatConfigBuilder` context (expecting
+/// `ChatConfigParameter`) only the ``User`` struct matches.
+///
+/// ## Example Usage
+/// ```swift
+/// let request = try ChatRequest(model: "gpt-4") {
+///     try Temperature(0.7)
+/// } messages: {
+///     System("You are a helpful assistant.")
+///     User("Explain async/await in Swift.")
+/// }
+/// ```
+///
+/// - Parameter content: The user message text
+/// - Returns: A ``TextMessage`` with role `.user`
+@inlinable
+public func User(_ content: String) -> TextMessage {
 	TextMessage(role: .user, content: content)
 }
 
@@ -724,17 +748,17 @@ public struct LogitBias: ChatConfigParameter {
 /// ## Example Usage
 /// ```swift
 /// // Using a hashed user ID
-/// try User("user_abc123")
-/// 
+/// try UserID("user_abc123")
+///
 /// // Using a UUID-based identifier
-/// try User("550e8400-e29b-41d4-a716-446655440000")
-/// 
+/// try UserID("550e8400-e29b-41d4-a716-446655440000")
+///
 /// // Using an application-specific format
-/// try User("app_user_12345")
+/// try UserID("app_user_12345")
 /// ```
 ///
 /// - Note: User identifier cannot be empty. Empty strings will throw ``LLMError/invalidValue(_:)``.
-public struct User: ChatConfigParameter {
+public struct UserID: ChatConfigParameter {
 	/// The user identifier string (cannot be empty)
 	public let value: String
 
@@ -750,6 +774,10 @@ public struct User: ChatConfigParameter {
 		request.user = value
 	}
 }
+
+/// Backward-compatible alias for ``UserID``.
+@available(*, deprecated, renamed: "UserID")
+public typealias UserIdentifier = UserID
 
 /// Defines up to 4 sequences where the API will stop generating further tokens.
 ///
@@ -1671,7 +1699,7 @@ public struct ChatBuilder {
 ///     try MaxTokens(300)
 ///     
 ///     if environment == "development" {
-///         try User("dev-user")
+///         try UserID("dev-user")
 ///         try N(3)                  // Multiple responses for comparison
 ///     }
 ///     
@@ -1689,7 +1717,7 @@ public struct ChatBuilder {
 ///     try Temperature(0.7)
 ///     
 ///     if let id = userID {
-///         try User(id)
+///         try UserID(id)
 ///     }
 /// }
 /// ```
@@ -1899,7 +1927,7 @@ public struct ToolsBuilder {
 ///     try MaxTokens(500)
 ///     try FrequencyPenalty(0.1)
 ///     try PresencePenalty(0.1)
-///     try User("user-123")
+///     try UserID("user-123")
 ///     try Stop(["END", "STOP"])
 /// } messages: {
 ///     TextMessage(role: .system, content: "Be creative but concise.")

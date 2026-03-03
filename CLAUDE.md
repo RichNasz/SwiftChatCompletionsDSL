@@ -22,7 +22,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 
 ### Core Design Principles
 - **Explicit Configuration**: Requires `baseURL` (complete endpoint URL) and `model` for every request
-- **Result Builders**: Uses `@ChatBuilder` for messages, `@ChatConfigBuilder` for optional parameters, `@AgentToolBuilder` for agent tools
+- **Result Builders**: Uses `@ChatBuilder` for messages, `@ChatConfigBuilder` for optional parameters, `@AgentToolBuilder` for agent tools, `@SessionBuilder` for mixed messages+tools
 - **Type Safety**: Enforces roles, parameters, and responses at compile time
 - **Swift Concurrency**: Built with `async`/`await` and actors for thread-safe operations
 - **Value Types**: Uses structs for performance and immutability
@@ -40,13 +40,14 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - `@ChatBuilder`: Composes message sequences with control flow support
    - `@ChatConfigBuilder`: Composes configuration parameters declaratively
    - `@AgentToolBuilder`: Composes tool registrations for Agent
+   - `@SessionBuilder`: Composes mixed messages and tools for declarative ToolSession/Agent init
 
 3. **Protocol System**:
    - `ChatMessage`: Extensible protocol for different message types
    - `ChatConfigParameter`: Protocol for optional configuration parameters (requires `Sendable`)
 
 4. **Configuration Structs**: Type-safe wrappers for API parameters with validation
-   - `Temperature`, `MaxTokens`, `TopP`, `FrequencyPenalty`, `PresencePenalty`, etc.
+   - `Temperature`, `MaxTokens`, `TopP`, `FrequencyPenalty`, `PresencePenalty`, `UserID`, etc.
    - `RequestTimeout`, `ResourceTimeout` for controlling HTTP timeouts
    - `ToolChoiceParam` for controlling tool selection behavior
    - Each validates input ranges and throws `LLMError.invalidValue(String)` on invalid values
@@ -73,12 +74,16 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - Configurable `maxIterations` to prevent infinite loops
    - Duplicate tool name detection via `precondition`
    - Error context includes error type name in `toolExecutionFailed`
+   - Declarative init with `@SessionBuilder` for mixed messages+tools, plus `run(_ prompt:)` shorthand
+   - `SessionComponent` enum and `SessionBuilder` result builder for declarative configuration
 
 8. **Agent (Actor)**: High-level persistent agent
    - Manages `ChatConversation` for history across multiple `send()` calls
    - Uses `ToolSession` internally for automatic tool-calling loops
    - Maintains `[TranscriptEntry]` for debugging/observability
    - Builder init with `@AgentToolBuilder` for declarative tool registration (throws on duplicate tool names)
+   - Declarative init with `@SessionBuilder` for mixed messages+tools
+   - `run(_:)` method as alias for `send(_:)`
    - Introspection: `registeredToolNames`, `toolCount` computed properties
 
 9. **Response Convenience Extensions**:
@@ -149,6 +154,7 @@ Custom `LLMError` enum covers:
 - `JSONSchema.init(from: JSONSchemaValue)` converts macros `JSONSchemaValue` → DSL `JSONSchema`
 - `Tool.init(from: ToolDefinition)` converts macros `ToolDefinition` → DSL `Tool`
 - `AgentTool.init<T: ChatCompletionsTool>(_ instance: T)` wraps macro-defined tools for Agent use
+- `Tools<T: ChatCompletionsTool>(_ instance: T) -> AgentTool` convenience for `@SessionBuilder` blocks
 
 ### Extensibility
 - Add custom message types by conforming to `ChatMessage`
@@ -176,6 +182,10 @@ The test suite uses Swift Testing framework and covers:
 - Agent builder duplicate tool detection, no-tools creation
 - Agent tool introspection (registeredToolNames, toolCount)
 - Assistant() and other convenience message functions
+- User() convenience function and UserID config parameter coexistence
+- SessionBuilder with messages and tools
+- ToolSession declarative init and run(_ prompt:) shorthand
+- Agent declarative init with @SessionBuilder and run(_:) alias
 
 ## File Structure
 ```
@@ -191,7 +201,7 @@ Sources/SwiftChatCompletionsDSL/
 Sources/SwiftChatCompletionsDSLMacros/
 ├── MacrosBridge.swift                       # Bridge to SwiftChatCompletionsMacros
 Tests/SwiftChatCompletionsDSLTests/
-├── SwiftChatCompletionsDSLTests.swift      # All test cases (112 tests)
+├── SwiftChatCompletionsDSLTests.swift      # All test cases (120 tests)
 Spec/
 ├── SwiftChatCompletionsDSL.md              # Core specification
 ├── ToolCalling.md                           # Tool calling type specification

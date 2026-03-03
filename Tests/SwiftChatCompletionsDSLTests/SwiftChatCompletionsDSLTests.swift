@@ -120,12 +120,12 @@ import Testing
 
 @Test func testUserValidation() throws {
     // Valid user values
-    _ = try User("user123")
-    _ = try User("a")
+    _ = try UserID("user123")
+    _ = try UserID("a")
     
     // Invalid user values
     #expect(throws: (any Error).self) {
-        try User("")
+        try UserID("")
     }
 }
 
@@ -292,7 +292,7 @@ import Testing
         try FrequencyPenalty(0.5)
         try PresencePenalty(-0.2)
         try N(2)
-        try User("user123")
+        try UserID("user123")
         LogitBias(["token": 1])
         try Stop(["\n", ".", "!"])
     }, messages: [
@@ -465,7 +465,7 @@ import Testing
         try RequestTimeout(90)
         try TopP(0.9)
         try ResourceTimeout(270)
-        try User("test-user")
+        try UserID("test-user")
     }, messages: [
         TextMessage(role: .user, content: "Complex configuration test")
     ])
@@ -685,7 +685,7 @@ import Testing
 
 @Test func testUserThrowsInvalidValue() {
     #expect(throws: LLMError.invalidValue("User identifier cannot be empty")) {
-        try User("")
+        try UserID("")
     }
 }
 
@@ -1791,6 +1791,89 @@ struct AllNetworkTests {
     #expect(request.messages[3].role == .user)
 }
 
+// MARK: - User Convenience Tests
+
+@Test func testUserConvenienceFunction() {
+    let msg = User("Hello there!")
+    #expect(msg.role == .user)
+    #expect(msg.content == "Hello there!")
+}
+
+@Test func testUserInChatBuilder() throws {
+    let request = try ChatRequest(model: "gpt-4") {
+    } messages: {
+        System("You are a helpful assistant.")
+        User("What is 2+2?")
+        Assistant("4")
+        User("And 3+3?")
+    }
+
+    #expect(request.messages.count == 4)
+    #expect(request.messages[0].role == .system)
+    #expect(request.messages[1].role == .user)
+    #expect(request.messages[2].role == .assistant)
+    #expect(request.messages[3].role == .user)
+}
+
+@Test func testUserIDConfigParameter() throws {
+    // Verify UserID (formerly User) still works as config parameter
+    let request = try ChatRequest(model: "gpt-4") {
+        try UserID("user-abc123")
+    } messages: {
+        User("Hello")
+    }
+
+    #expect(request.user == "user-abc123")
+    #expect(request.messages.count == 1)
+    #expect(request.messages[0].role == .user)
+}
+
+// MARK: - SessionBuilder Tests
+
+@Test func testSessionBuilderMessages() {
+    @SessionBuilder func build() -> [SessionComponent] {
+        System("You are helpful.")
+        User("Hello!")
+    }
+
+    let components = build()
+    #expect(components.count == 2)
+    if case .message(let msg) = components[0] {
+        #expect(msg.role == .system)
+    } else {
+        #expect(Bool(false), "Expected .message")
+    }
+    if case .message(let msg) = components[1] {
+        #expect(msg.role == .user)
+    } else {
+        #expect(Bool(false), "Expected .message")
+    }
+}
+
+@Test func testSessionBuilderMixed() {
+    let tool = Tool(function: Tool.Function(
+        name: "test_tool",
+        description: "A test tool",
+        parameters: .object(properties: [:], required: [])
+    ))
+
+    @SessionBuilder func build() -> [SessionComponent] {
+        System("You are helpful.")
+        AgentTool(tool: tool) { _ in "result" }
+    }
+
+    let components = build()
+    #expect(components.count == 2)
+    if case .message = components[0] { } else {
+        #expect(Bool(false), "Expected .message")
+    }
+    if case .agentTool(let at) = components[1] {
+        #expect(at.tool.function.name == "test_tool")
+    } else {
+        #expect(Bool(false), "Expected .agentTool")
+    }
+}
+
 // MARK: - ToolCall.decodeArguments Tests
 
 @Test func testDecodeArgumentsSuccess() throws {
@@ -2665,5 +2748,178 @@ struct AgentTests {
         #expect(toolCount == 0)
     }
 } // end AgentTests
+
+// MARK: - Declarative Init Tests
+
+struct DeclarativeInitTests {
+
+    @Test func toolSessionDeclarativeInit() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        // First response: tool call
+        let toolCallResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\\"location\\":\\"Paris\\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+        }
+        """
+
+        // Second response: final text
+        let textResponse = """
+        {
+            "id": "chatcmpl-2",
+            "object": "chat.completion",
+            "created": 1700000001,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The weather in Paris is 72°F and sunny."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30}
+        }
+        """
+
+        var callCount = 0
+        MockURLProtocol.requestHandler = { request in
+            callCount += 1
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            let body = callCount == 1 ? toolCallResponse : textResponse
+            return (response, body.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let weatherTool = Tool(function: Tool.Function(
+            name: "get_weather",
+            description: "Get weather",
+            parameters: .object(
+                properties: ["location": .string(description: "City")],
+                required: ["location"]
+            )
+        ))
+
+        let session = ToolSession(client: client, model: "gpt-4") {
+            System("You are a weather assistant.")
+            AgentTool(tool: weatherTool) { _ in
+                return "{\"temperature\": 72, \"condition\": \"sunny\"}"
+            }
+        }
+
+        let result = try await session.run("What's the weather in Paris?")
+
+        #expect(result.response.firstContent == "The weather in Paris is 72°F and sunny.")
+        #expect(result.iterations == 1)
+        #expect(result.log.count == 1)
+        #expect(result.log[0].name == "get_weather")
+        #expect(callCount == 2)
+    }
+
+    @Test func agentDeclarativeInitAndRun() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        let textResponse = """
+        {
+            "id": "chatcmpl-1",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "gpt-4",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello! I'm a helpful assistant."},
+                "finish_reason": "stop"
+            }],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
+        }
+        """
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+            )!
+            return (response, textResponse.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let agent = try Agent(client: client, model: "gpt-4") {
+            System("You are a helpful assistant.")
+        }
+
+        // Test run() alias for send()
+        let response = try await agent.run("Hi there")
+        #expect(response == "Hello! I'm a helpful assistant.")
+
+        let history = await agent.history
+        // system + user + assistant = 3
+        #expect(history.count == 3)
+        #expect(history[0].role == .system)
+        #expect(history[1].role == .user)
+        #expect(history[2].role == .assistant)
+    }
+
+    @Test func agentDeclarativeInitWithTools() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let tool = Tool(function: Tool.Function(
+            name: "calc",
+            description: "Calculate",
+            parameters: .object(properties: [:], required: [])
+        ))
+
+        let agent = try Agent(client: client, model: "gpt-4") {
+            System("You are a calculator.")
+            AgentTool(tool: tool) { _ in "42" }
+        }
+
+        let names = await agent.registeredToolNames
+        #expect(names == ["calc"])
+        let count = await agent.toolCount
+        #expect(count == 1)
+    }
+
+} // end DeclarativeInitTests
 
 } // end AllNetworkTests
