@@ -2015,6 +2015,7 @@ public struct ChatRequest: Encodable, Sendable {
 		case stop
 		case tools
 		case toolChoice = "tool_choice"
+		case maxCompletionTokens = "max_completion_tokens"
 	}
 
 	public func encode(to encoder: Encoder) throws {
@@ -2029,6 +2030,7 @@ public struct ChatRequest: Encodable, Sendable {
 
 		try container.encodeIfPresent(temperature, forKey: .temperature)
 		try container.encodeIfPresent(maxTokens, forKey: .maxTokens)
+		try container.encodeIfPresent(maxTokens, forKey: .maxCompletionTokens)
 		try container.encodeIfPresent(topP, forKey: .topP)
 		try container.encodeIfPresent(frequencyPenalty, forKey: .frequencyPenalty)
 		try container.encodeIfPresent(presencePenalty, forKey: .presencePenalty)
@@ -3109,6 +3111,7 @@ public actor LLMClient {
 					for try await byte in asyncBytes {
 						try Task.checkCancellation()
 						let character = Character(UnicodeScalar(byte))
+						if character == "\r" { continue }
 						buffer.append(character)
 
 						// Safety check for malformed streams that don't send proper delimiters

@@ -596,6 +596,7 @@ import SwiftChatCompletionsMacros
     // Optional fields should not be present when nil
     #expect(json?["temperature"] == nil)
     #expect(json?["max_tokens"] == nil)
+    #expect(json?["max_completion_tokens"] == nil)
     #expect(json?["top_p"] == nil)
     #expect(json?["frequency_penalty"] == nil)
     #expect(json?["presence_penalty"] == nil)
@@ -3204,6 +3205,94 @@ struct DeclarativeInitTests {
     #expect(request.messages[0].role == .system)
     #expect(request.messages[1].role == .user)
     #expect(request.tools == nil)
+}
+
+// MARK: - Gemini Compatibility Tests
+
+@Test func testMaxCompletionTokensEncoding() throws {
+    let request = try ChatRequest(model: "gemini-pro", config: {
+        try MaxTokens(500)
+    }, messages: [
+        TextMessage(role: .user, content: "Hello"),
+    ])
+
+    let data = try JSONEncoder().encode(request)
+    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+
+    #expect(json?["max_tokens"] as? Int == 500)
+    #expect(json?["max_completion_tokens"] as? Int == 500)
+}
+
+@Test func streamWithCRLFLineEndings() async throws {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [MockURLProtocol.self]
+
+    // SSE data using \r\n\r\n separators (Gemini-style)
+    let sseData = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\r\n\r\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":null}]}\r\n\r\ndata: [DONE]\r\n\r\n"
+
+    MockURLProtocol.requestHandler = { request in
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        return (response, sseData.data(using: .utf8)!)
+    }
+
+    let client = try LLMClient(
+        baseURL: "https://api.test.com/chat",
+        apiKey: "test-key",
+        sessionConfiguration: config
+    )
+
+    let request = try ChatRequest(model: "gemini-pro", stream: true, messages: [
+        TextMessage(role: .user, content: "Hi"),
+    ])
+
+    var deltas: [ChatDelta] = []
+    for try await delta in try await client.stream(request) {
+        deltas.append(delta)
+    }
+    #expect(deltas.count == 2)
+    #expect(deltas[0].firstContent == "hello")
+    #expect(deltas[1].firstContent == " world")
+}
+
+@Test func streamWithoutDONESignal() async throws {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [MockURLProtocol.self]
+
+    // SSE data that ends without [DONE] — stream should complete normally
+    let sseData = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
+
+    MockURLProtocol.requestHandler = { request in
+        let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: nil
+        )!
+        return (response, sseData.data(using: .utf8)!)
+    }
+
+    let client = try LLMClient(
+        baseURL: "https://api.test.com/chat",
+        apiKey: "test-key",
+        sessionConfiguration: config
+    )
+
+    let request = try ChatRequest(model: "gemini-pro", stream: true, messages: [
+        TextMessage(role: .user, content: "Hi"),
+    ])
+
+    var deltas: [ChatDelta] = []
+    for try await delta in try await client.stream(request) {
+        deltas.append(delta)
+    }
+    #expect(deltas.count == 2)
+    #expect(deltas[0].firstContent == "hi")
+    #expect(deltas[1].firstFinishReason == "stop")
 }
 
 } // end AllNetworkTests
