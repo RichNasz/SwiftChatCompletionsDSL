@@ -1159,12 +1159,12 @@ struct AllNetworkTests {
         }
     }
 
-    @Test func streamDecodingFailed() async throws {
+    @Test func streamSkipsMalformedJSON() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
 
-        // SSE with malformed JSON in data line - streaming throws decodingFailed
-        let malformedSSE = "data: { not valid json }\n\ndata: [DONE]\n\n"
+        // SSE with malformed JSON followed by valid delta and DONE — malformed event is skipped
+        let sseData = "data: { not valid json }\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n"
 
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
@@ -1173,7 +1173,7 @@ struct AllNetworkTests {
                 httpVersion: nil,
                 headerFields: nil
             )!
-            return (response, malformedSSE.data(using: .utf8)!)
+            return (response, sseData.data(using: .utf8)!)
         }
 
         let client = try LLMClient(
@@ -1186,12 +1186,51 @@ struct AllNetworkTests {
             TextMessage(role: .user, content: "Hi")
         ])
 
-        // The stream should throw decodingFailed when it encounters malformed JSON
-        await #expect(throws: LLMError.self) {
-            for try await _ in try await client.stream(request) {
-                // Consume stream - should throw on malformed JSON
-            }
+        // Malformed JSON is skipped; valid delta is received
+        var deltas: [ChatDelta] = []
+        for try await delta in try await client.stream(request) {
+            deltas.append(delta)
         }
+        #expect(deltas.count == 1)
+        #expect(deltas.first?.firstContent == "ok")
+    }
+
+    @Test func streamWithUsageChunk() async throws {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+
+        // Content delta, then a usage-only chunk (no choices key), then DONE
+        let sseData = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\ndata: {\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\ndata: [DONE]\n\n"
+
+        MockURLProtocol.requestHandler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, sseData.data(using: .utf8)!)
+        }
+
+        let client = try LLMClient(
+            baseURL: "https://api.test.com/chat",
+            apiKey: "test-key",
+            sessionConfiguration: config
+        )
+
+        let request = try ChatRequest(model: "gpt-4", stream: true, messages: [
+            TextMessage(role: .user, content: "Hi")
+        ])
+
+        var deltas: [ChatDelta] = []
+        for try await delta in try await client.stream(request) {
+            deltas.append(delta)
+        }
+        #expect(deltas.count == 2)
+        #expect(deltas[0].firstContent == "hello")
+        #expect(deltas[0].usage == nil)
+        #expect(deltas[1].choices.isEmpty)
+        #expect(deltas[1].usage?.totalTokens == 8)
     }
 
 // MARK: - Streaming Tool Call Integration Tests

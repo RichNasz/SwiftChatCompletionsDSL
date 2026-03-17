@@ -22,7 +22,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 
 ### Core Design Principles
 - **Explicit Configuration**: Requires `baseURL` (complete endpoint URL) and `model` for every request
-- **Result Builders**: Uses `@ChatBuilder` for messages, `@ChatConfigBuilder` for optional parameters, `@AgentToolBuilder` for agent tools, `@SessionBuilder` for mixed messages+tools
+- **Result Builders**: Uses `@ChatConfigBuilder` for optional parameters, `@AgentToolBuilder` for agent tools, `@SessionBuilder` for mixed messages+tools in ChatRequest/ToolSession/Agent
 - **Type Safety**: Enforces roles, parameters, and responses at compile time
 - **Swift Concurrency**: Built with `async`/`await` and actors for thread-safe operations
 - **Value Types**: Uses structs for performance and immutability
@@ -33,7 +33,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 1. **LLMClient (Actor)**: Thread-safe client for API communication
    - Manages HTTP requests to OpenAI-compatible endpoints
    - Supports both streaming and non-streaming responses
-   - Uses `nonisolated` streaming method for better usability
+   - `stream()` is `nonisolated async throws` — setup errors surface at call site, not mid-iteration; cancellation cleans up via `continuation.onTermination`
    - Configurable request and resource timeouts for reliable network operations
 
 2. **Result Builders**:
@@ -51,6 +51,9 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - `RequestTimeout`, `ResourceTimeout` for controlling HTTP timeouts
    - `ToolChoiceParam` for controlling tool selection behavior
    - Each validates input ranges and throws `LLMError.invalidValue(String)` on invalid values
+   - `LogitBias`: throws if any bias value is outside `[-100, 100]`
+   - `Stop`: throws if more than 4 sequences are provided
+   - `N`: throws if value exceeds 128
 
 5. **Conversation Management**:
    - `ChatConversation`: Utility for managing persistent conversation history
@@ -66,28 +69,33 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - `ToolChoice`: Controls model tool selection (`auto`, `none`, `required`, `function(name)`)
    - `AssistantToolCallMessage`: Message type for assistant tool call requests
    - `ToolResultMessage`: Message type for tool execution results
+   - `AssistantToolCall(_ toolCalls:)` / `ToolResult(id:content:)`: convenience constructors (lowercase-style, like `System()`, `User()`)
 
 7. **ToolSession (Struct)**: Orchestrates the tool-calling loop
    - Sends request → parses tool_calls → executes handlers in parallel → sends results → repeats
    - Uses `withThrowingTaskGroup` for parallel tool execution
-   - Returns `ToolSessionResult` with response, messages, iterations, and execution log
-   - Configurable `maxIterations` to prevent infinite loops
-   - Duplicate tool name detection via `precondition`
-   - Error context includes error type name in `toolExecutionFailed`
-   - Declarative init with `@SessionBuilder` for mixed messages+tools, plus `run(_ prompt:)` shorthand
+   - Returns `ToolSessionResult` with response, messages, iterations, log, and `hitIterationLimit: Bool`
+   - When `maxIterations` is reached, returns result with `hitIterationLimit: true` instead of throwing; use `failOnIterationLimit: Bool = false` param to opt into throwing behavior
+   - Tool handler errors are caught and sent back to the model as a `ToolResultMessage` (error string), not thrown; only `unknownTool` propagates as an error
+   - All inits `throws` on duplicate tool names (not `precondition`)
+   - Declarative init with `@SessionBuilder` for mixed messages+tools, plus `run(_ prompt:)` shorthand; declarative init accepts `@ChatConfigBuilder config:` parameter
    - `SessionComponent` enum and `SessionBuilder` result builder for declarative configuration
+   - `SessionBuilder` accepts bare `Tool` definitions (`.toolDefinition`) as well as `AgentTool` and messages
 
 8. **Agent (Actor)**: High-level persistent agent
    - Manages `ChatConversation` for history across multiple `send()` calls
    - Uses `ToolSession` internally for automatic tool-calling loops
    - Maintains `[TranscriptEntry]` for debugging/observability
-   - Builder init with `@AgentToolBuilder` for declarative tool registration (throws on duplicate tool names)
+   - All inits `throws` on duplicate tool names (not `precondition`)
+   - Builder init with `@AgentToolBuilder` for declarative tool registration
    - Declarative init with `@SessionBuilder` for mixed messages+tools
-   - `run(_:)` method as alias for `send(_:)`
+   - Primary method is `send(_:)`; no `run(_:)` alias
    - Introspection: `registeredToolNames`, `toolCount` computed properties
 
 9. **Response Convenience Extensions**:
-   - `ChatResponse`: `firstContent`, `firstFinishReason`, `totalTokens`, `firstToolCalls`, `requiresToolExecution`
+   - `ChatResponse`: `firstContent: String?`, `firstFinishReason`, `totalTokens: Int?`, `firstToolCalls`, `requiresToolExecution`
+   - `ChatResponse.Message.content` is `String?` (null from API decodes as `nil`); use `.contentOrEmpty` for `String`
+   - `totalTokens` returns `nil` when `usage` is absent in the response
    - `ChatDelta`: `firstContent`, `firstFinishReason`, `firstToolCallDeltas`
 
 10. **Type Aliases**:
@@ -96,7 +104,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 ### JSON Serialization
 - Uses `CodingKeys` to map Swift camelCase to OpenAI snake_case format
 - Example: `maxTokens` → `max_tokens`, `topP` → `top_p`, `toolCalls` → `tool_calls`
-- `ChatResponse.Message.content` decodes `null` as `""` for source compatibility
+- `ChatResponse.Message.content` is `String?`; null from API decodes as `nil`
 
 ### Error Handling
 Custom `LLMError` enum covers:
@@ -106,6 +114,8 @@ Custom `LLMError` enum covers:
 - Missing required fields (`baseURL`, `model`)
 - Invalid parameter values with descriptive messages (`invalidValue(String)`)
 - Tool calling errors: `maxIterationsExceeded(Int)`, `unknownTool(String)`, `toolExecutionFailed(toolName:message:)`
+- Network-specific: `requestTimeout`, `resourceTimeout`, `connectionFailed(String)`
+- `isRetryable: Bool` computed property — `true` for `rateLimit`, `requestTimeout`, `resourceTimeout`, `connectionFailed`, and `serverError` with status ≥ 500
 
 ### Swift Version Requirements
 - **Minimum**: Swift 6.2+ (for trailing commas, `nonisolated`, improved type inference)
@@ -136,7 +146,7 @@ Custom `LLMError` enum covers:
 ### Streaming Support
 - Parses Server-Sent Events (SSE) format
 - Handles `data: [DONE]` termination signals
-- Returns `AsyncThrowingStream<ChatDelta, Error>` for real-time content streaming
+- `stream()` is `nonisolated async throws -> AsyncThrowingStream<ChatDelta, Error>` — setup errors (invalid URL, encoding) throw at call site; `continuation.onTermination` cancels the inner `Task` if the caller breaks early
 
 ### Tool Calling
 - `Tool` is a typealias for `ToolDefinition` from `SwiftChatCompletionsMacros`; use `Tool(name:description:parameters:)` directly
@@ -146,7 +156,9 @@ Custom `LLMError` enum covers:
 - `Agent` uses `ToolSession` internally for automatic tool-calling loops
 - `ToolCall.decodeArguments()` provides typed argument decoding, wrapping errors as `LLMError.decodingFailed`
 - `ToolCallAccumulator` assembles streaming `ToolCallDelta` chunks into complete `ToolCall` objects
-- Duplicate tool name detection: `precondition` in `ToolSession`/`Agent` explicit init, `throws` in `Agent` builder init
+- Duplicate tool name detection: `throws LLMError.invalidValue` in all `ToolSession`/`Agent` inits (both explicit and builder)
+- Tool handler errors are caught inside `withThrowingTaskGroup` and returned as error strings to the model (not re-thrown); only `unknownTool` escapes as an error
+- `ToolSessionResult.hitIterationLimit: Bool` indicates whether session ended at iteration limit
 - `requiresToolExecution` checks only `firstToolCalls` (not `firstFinishReason`) for provider compatibility
 
 ### Macros Integration
@@ -162,7 +174,7 @@ Custom `LLMError` enum covers:
 ## Testing Strategy
 
 The test suite uses Swift Testing framework and covers:
-- Parameter validation and error cases
+- Parameter validation and error cases (including LogitBias range, Stop max-4, N max-128)
 - Result builder functionality
 - Conversation history management
 - Async streaming operations (with mocked `URLSession`)
@@ -174,16 +186,21 @@ The test suite uses Swift Testing framework and covers:
 - ToolCallAccumulator (basic, parallel, reset)
 - ToolChoice encoding for all 4 variants
 - AssistantToolCallMessage/ToolResultMessage encoding
+- AssistantToolCall() and ToolResult() convenience functions
 - ChatResponse/ChatDelta with tool calls
-- ToolSession integration tests (single, parallel, max iterations, max iterations boundary, unknown tool, handler throws)
+- ChatResponse.Message.content as String? (null → nil, empty → "")
+- totalTokens as Int? (nil when usage absent)
+- LLMError.isRetryable (true for rateLimit, requestTimeout, resourceTimeout, connectionFailed, 5xx; false for client errors)
+- ToolSession integration tests (single, parallel, hitIterationLimit flag, unknown tool, handler-error-to-model)
+- ToolSession/Agent duplicate detection throws (all inits)
 - Agent multi-turn conversation, transcript logging, reset, send without tools
 - Agent builder duplicate tool detection, no-tools creation
 - Agent tool introspection (registeredToolNames, toolCount)
 - Assistant() and other convenience message functions
 - User() convenience function and UserID config parameter coexistence
 - SessionBuilder with messages and tools
+- ChatRequest @SessionBuilder configure: init with messages+tools
 - ToolSession declarative init and run(_ prompt:) shorthand
-- Agent declarative init with @SessionBuilder and run(_:) alias
 
 ## File Structure
 ```
@@ -197,7 +214,7 @@ Sources/SwiftChatCompletionsDSL/
 │   ├── DSL.md                               # DSL guide for beginners
 │   └── Usage.md                             # Usage examples
 Tests/SwiftChatCompletionsDSLTests/
-├── SwiftChatCompletionsDSLTests.swift      # All test cases (120 tests)
+├── SwiftChatCompletionsDSLTests.swift      # All test cases (130 tests)
 Spec/
 ├── SwiftChatCompletionsDSL.md              # Core public API specification
 ├── SwiftChatCompletionsDSL-HOW.md          # Core implementation details

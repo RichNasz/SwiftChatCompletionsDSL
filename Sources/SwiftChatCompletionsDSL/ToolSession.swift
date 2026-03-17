@@ -12,13 +12,16 @@ import Foundation
 
 /// A component that can appear inside a `@SessionBuilder` block.
 ///
-/// `SessionComponent` allows a single result builder to accept both messages
-/// (like `System("...")` or `User("...")`) and tool registrations (`AgentTool`).
+/// `SessionComponent` allows a single result builder to accept messages
+/// (like `System("...")` or `User("...")`), tool registrations (`AgentTool`),
+/// and bare tool definitions (`Tool`).
 public enum SessionComponent: Sendable {
 	/// A chat message (system prompt, user message, etc.)
 	case message(any ChatMessage)
 	/// A tool registration with its handler
 	case agentTool(AgentTool)
+	/// A bare tool definition (no handler — for use with `ChatRequest` only)
+	case toolDefinition(Tool)
 }
 
 // MARK: - Session Builder
@@ -51,6 +54,11 @@ public struct SessionBuilder {
 		[.agentTool(tool)]
 	}
 
+	/// Accepts a bare `Tool` definition (no handler). Useful with `ChatRequest`.
+	public static func buildExpression(_ tool: Tool) -> [SessionComponent] {
+		[.toolDefinition(tool)]
+	}
+
 	public static func buildBlock(_ components: [SessionComponent]...) -> [SessionComponent] {
 		components.flatMap { $0 }
 	}
@@ -80,7 +88,7 @@ public struct ToolCallLogEntry: Sendable {
 	public let name: String
 	/// The raw JSON arguments passed to the tool
 	public let arguments: String
-	/// The result returned by the tool handler
+	/// The result returned by the tool handler (may contain an error description if the handler threw)
 	public let result: String
 	/// How long the tool execution took
 	public let duration: Duration
@@ -96,6 +104,8 @@ public struct ToolSessionResult: Sendable {
 	public let iterations: Int
 	/// Log of all tool call executions
 	public let log: [ToolCallLogEntry]
+	/// Whether the session ended because the iteration limit was reached
+	public let hitIterationLimit: Bool
 }
 
 /// Orchestrates the tool-calling loop: send → parse tool_calls → execute → results → repeat.
@@ -104,9 +114,12 @@ public struct ToolSessionResult: Sendable {
 /// receiving tool call requests, executing the corresponding handlers, and
 /// sending results back until the model produces a final text response.
 ///
+/// Tool handler errors are sent back to the model as error strings rather than
+/// crashing the session, allowing the model to acknowledge and recover.
+///
 /// ## Example Usage
 /// ```swift
-/// let session = ToolSession(
+/// let session = try ToolSession(
 ///     client: client,
 ///     tools: [weatherTool],
 ///     handlers: ["get_weather": { args in
@@ -131,6 +144,7 @@ public struct ToolSession: Sendable {
 	private let maxIterations: Int
 	private let model: String?
 	private let initialMessages: [any ChatMessage]
+	private let storedConfigParams: [ChatConfigParameter]
 
 	/// Creates a new ToolSession.
 	/// - Parameters:
@@ -139,17 +153,19 @@ public struct ToolSession: Sendable {
 	///   - toolChoice: Optional tool choice strategy
 	///   - maxIterations: Maximum number of tool-calling iterations (default: 10)
 	///   - handlers: Dictionary mapping tool names to their handler closures
+	/// - Throws: `LLMError.invalidValue` if duplicate tool names are detected
 	public init(
 		client: LLMClient,
 		tools: [Tool],
 		toolChoice: ToolChoice? = nil,
 		maxIterations: Int = 10,
 		handlers: [String: ToolHandler]
-	) {
-		// Check for duplicate tool names
+	) throws {
 		let names = tools.map(\.name)
 		let duplicates = Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys
-		precondition(duplicates.isEmpty, "Duplicate tool names detected: \(duplicates.sorted().joined(separator: ", "))")
+		guard duplicates.isEmpty else {
+			throw LLMError.invalidValue("Duplicate tool names detected: \(duplicates.sorted().joined(separator: ", "))")
+		}
 
 		self.client = client
 		self.tools = tools
@@ -158,6 +174,7 @@ public struct ToolSession: Sendable {
 		self.handlers = handlers
 		self.model = nil
 		self.initialMessages = []
+		self.storedConfigParams = []
 	}
 
 	/// Creates a new ToolSession with declarative configuration.
@@ -166,7 +183,7 @@ public struct ToolSession: Sendable {
 	///
 	/// ## Example Usage
 	/// ```swift
-	/// let session = ToolSession(client: client, model: "gpt-4") {
+	/// let session = try ToolSession(client: client, model: "gpt-4") {
 	///     System("You are a helpful assistant.")
 	///     AgentTool(tool: weatherTool) { args in
 	///         return "{\"temperature\": 72}"
@@ -181,14 +198,18 @@ public struct ToolSession: Sendable {
 	///   - model: The model identifier
 	///   - toolChoice: Optional tool choice strategy
 	///   - maxIterations: Maximum number of tool-calling iterations (default: 10)
+	///   - config: Optional configuration parameters using ChatConfigBuilder
 	///   - configure: A `@SessionBuilder` block containing messages and tools
+	/// - Throws: `LLMError.invalidValue` if duplicate tool names are detected,
+	///           or parameter validation errors from the config block
 	public init(
 		client: LLMClient,
 		model: String,
 		toolChoice: ToolChoice? = nil,
 		maxIterations: Int = 10,
+		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
 		@SessionBuilder configure: () -> [SessionComponent]
-	) {
+	) throws {
 		let components = configure()
 		var messages: [any ChatMessage] = []
 		var toolDefs: [Tool] = []
@@ -201,13 +222,16 @@ public struct ToolSession: Sendable {
 			case .agentTool(let agentTool):
 				toolDefs.append(agentTool.tool)
 				toolHandlers[agentTool.tool.name] = agentTool.handler
+			case .toolDefinition(let tool):
+				toolDefs.append(tool)
 			}
 		}
 
-		// Check for duplicate tool names
 		let names = toolDefs.map(\.name)
 		let duplicates = Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys
-		precondition(duplicates.isEmpty, "Duplicate tool names detected: \(duplicates.sorted().joined(separator: ", "))")
+		guard duplicates.isEmpty else {
+			throw LLMError.invalidValue("Duplicate tool names detected: \(duplicates.sorted().joined(separator: ", "))")
+		}
 
 		self.client = client
 		self.tools = toolDefs
@@ -216,34 +240,40 @@ public struct ToolSession: Sendable {
 		self.handlers = toolHandlers
 		self.model = model
 		self.initialMessages = messages
+		self.storedConfigParams = try config()
 	}
 
 	/// Runs the tool-calling loop until the model produces a final response.
 	/// - Parameters:
 	///   - model: The model identifier
 	///   - messages: Initial messages for the conversation
+	///   - failOnIterationLimit: If true, throws `LLMError.maxIterationsExceeded` when the
+	///     iteration limit is reached instead of returning a result with `hitIterationLimit: true`
 	///   - config: Optional configuration parameters
 	/// - Returns: The final result including response, messages, and execution log
-	/// - Throws: `LLMError.maxIterationsExceeded` if the loop doesn't converge,
-	///           `LLMError.unknownTool` if model calls an unregistered tool,
+	/// - Throws: `LLMError.maxIterationsExceeded` if `failOnIterationLimit` is true and the loop
+	///           doesn't converge, `LLMError.unknownTool` if model calls an unregistered tool,
 	///           or any error from the LLM client
 	public func run(
 		model: String,
 		messages: [any ChatMessage],
+		failOnIterationLimit: Bool = false,
 		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] }
 	) async throws -> ToolSessionResult {
-		try await run(model: model, messages: messages, configParams: config())
+		try await run(model: model, messages: messages, failOnIterationLimit: failOnIterationLimit, configParams: try config())
 	}
 
 	/// Runs the tool-calling loop with pre-computed configuration parameters.
 	public func run(
 		model: String,
 		messages: [any ChatMessage],
+		failOnIterationLimit: Bool = false,
 		configParams: [ChatConfigParameter]
 	) async throws -> ToolSessionResult {
 		var currentMessages = messages
 		var allLog: [ToolCallLogEntry] = []
 		var iterations = 0
+		var lastResponse: ChatResponse? = nil
 
 		while iterations < maxIterations {
 			// Build request with tools
@@ -263,7 +293,8 @@ public struct ToolSession: Sendable {
 					response: response,
 					messages: currentMessages,
 					iterations: iterations,
-					log: allLog
+					log: allLog,
+					hitIterationLimit: false
 				)
 			}
 
@@ -276,7 +307,8 @@ public struct ToolSession: Sendable {
 				)
 			)
 
-			// Execute all tool handlers in parallel
+			// Execute all tool handlers in parallel; handler errors are returned as
+			// error strings rather than propagating — the model sees and can recover from them.
 			let results = try await withThrowingTaskGroup(
 				of: (Int, String, ToolCallLogEntry).self
 			) { group in
@@ -300,10 +332,15 @@ public struct ToolSession: Sendable {
 							)
 							return (index, result, logEntry)
 						} catch {
-							throw LLMError.toolExecutionFailed(
-								toolName: handlerName,
-								message: "[\(type(of: error))] \(error.localizedDescription)"
+							let duration = clock.now - start
+							let errorMessage = "Tool error [\(type(of: error))]: \(error.localizedDescription)"
+							let logEntry = ToolCallLogEntry(
+								name: handlerName,
+								arguments: toolCall.function.arguments,
+								result: errorMessage,
+								duration: duration
 							)
+							return (index, errorMessage, logEntry)
 						}
 					}
 				}
@@ -327,9 +364,23 @@ public struct ToolSession: Sendable {
 			}
 
 			iterations += 1
+			lastResponse = response
 		}
 
-		throw LLMError.maxIterationsExceeded(maxIterations)
+		// Iteration limit reached
+		if failOnIterationLimit {
+			throw LLMError.maxIterationsExceeded(maxIterations)
+		}
+		guard let finalResponse = lastResponse else {
+			throw LLMError.maxIterationsExceeded(maxIterations)
+		}
+		return ToolSessionResult(
+			response: finalResponse,
+			messages: currentMessages,
+			iterations: iterations,
+			log: allLog,
+			hitIterationLimit: true
+		)
 	}
 
 	/// Runs the tool-calling loop with a user prompt, using the model and messages
@@ -340,7 +391,7 @@ public struct ToolSession: Sendable {
 	///
 	/// ## Example Usage
 	/// ```swift
-	/// let session = ToolSession(client: client, model: "gpt-4") {
+	/// let session = try ToolSession(client: client, model: "gpt-4") {
 	///     System("You are a helpful assistant.")
 	///     AgentTool(tool: weatherTool) { args in
 	///         return "{\"temperature\": 72}"
@@ -360,6 +411,6 @@ public struct ToolSession: Sendable {
 			preconditionFailure("run(_:) requires ToolSession to be created with the declarative init(client:model:configure:) initializer")
 		}
 		let messages = initialMessages + [TextMessage(role: .user, content: prompt)]
-		return try await run(model: model, messages: messages)
+		return try await run(model: model, messages: messages, configParams: storedConfigParams)
 	}
 }

@@ -164,11 +164,12 @@ public actor Agent {
 		toolHandlers: [String: ToolSession.ToolHandler] = [:],
 		config: [ChatConfigParameter] = [],
 		maxToolIterations: Int = 10
-	) {
-		// Check for duplicate tool names
+	) throws {
 		let names = tools.map(\.name)
 		let duplicates = Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys
-		precondition(duplicates.isEmpty, "Duplicate tool names detected: \(duplicates.sorted().joined(separator: ", "))")
+		guard duplicates.isEmpty else {
+			throw LLMError.invalidValue("Duplicate tool names detected: \(duplicates.sorted().joined(separator: ", "))")
+		}
 
 		self.client = client
 		self.model = model
@@ -281,6 +282,10 @@ public actor Agent {
 				}
 				toolDefs.append(agentTool.tool)
 				handlers[name] = agentTool.handler
+			case .toolDefinition:
+				// Bare Tool definitions are not meaningful in Agent context (no handler);
+				// silently ignore to allow shared @SessionBuilder blocks.
+				break
 			}
 		}
 
@@ -333,7 +338,7 @@ public actor Agent {
 		}
 
 		// Use ToolSession for tool-calling loop
-		let session = ToolSession(
+		let session = try ToolSession(
 			client: client,
 			tools: tools,
 			toolChoice: toolChoice,
@@ -349,6 +354,10 @@ public actor Agent {
 			messages: messagesCopy,
 			configParams: configCopy
 		)
+
+		if result.hitIterationLimit {
+			throw LLMError.maxIterationsExceeded(maxToolIterations)
+		}
 
 		// Record tool activity in transcript
 		for entry in result.log {
@@ -369,18 +378,6 @@ public actor Agent {
 		conversation.addAssistant(content: content)
 		_transcript.append(.assistantMessage(content))
 		return content
-	}
-
-	/// Sends a user message and returns the assistant's response.
-	///
-	/// This is a convenience alias for ``send(_:)`` that provides
-	/// Apple FoundationModels-style naming.
-	///
-	/// - Parameter message: The user's message text
-	/// - Returns: The assistant's text response
-	/// - Throws: `LLMError` for API or tool execution failures
-	public func run(_ message: String) async throws -> String {
-		try await send(message)
 	}
 
 	/// Resets the agent's conversation history and transcript.

@@ -88,6 +88,29 @@ public enum LLMError: Error, Equatable {
 	case unknownTool(String)
 	/// Tool handler threw an error during execution
 	case toolExecutionFailed(toolName: String, message: String)
+	/// Individual HTTP request timed out
+	case requestTimeout
+	/// Complete resource loading timed out
+	case resourceTimeout
+	/// Network connection could not be established
+	case connectionFailed(String)
+
+	/// Whether this error is likely transient and worth retrying.
+	///
+	/// Returns `true` for rate limits, server errors (≥500), request timeouts,
+	/// resource timeouts, and connection failures.
+	public var isRetryable: Bool {
+		switch self {
+		case .rateLimit, .requestTimeout, .resourceTimeout:
+			return true
+		case .serverError(let statusCode, _):
+			return statusCode >= 500
+		case .connectionFailed:
+			return true
+		default:
+			return false
+		}
+	}
 }
 
 // MARK: - Validation Helpers
@@ -358,6 +381,30 @@ public func User(_ content: String) -> TextMessage {
 @inlinable
 public func Assistant(_ content: String) -> TextMessage {
 	TextMessage(role: .assistant, content: content)
+}
+
+/// Creates an assistant tool-call message with the given tool calls.
+///
+/// Shorthand for `AssistantToolCallMessage(content: nil, toolCalls: toolCalls)`.
+///
+/// - Parameter toolCalls: The tool calls requested by the assistant
+/// - Returns: An ``AssistantToolCallMessage``
+@inlinable
+public func AssistantToolCall(_ toolCalls: [ToolCall]) -> AssistantToolCallMessage {
+	AssistantToolCallMessage(content: nil, toolCalls: toolCalls)
+}
+
+/// Creates a tool result message for the given tool call ID.
+///
+/// Shorthand for `ToolResultMessage(toolCallId: id, content: content)`.
+///
+/// - Parameters:
+///   - id: The ID of the tool call this result corresponds to
+///   - content: The tool execution result string
+/// - Returns: A ``ToolResultMessage``
+@inlinable
+public func ToolResult(id: String, content: String) -> ToolResultMessage {
+	ToolResultMessage(toolCallId: id, content: content)
 }
 
 // MARK: - Configuration Parameter Structs
@@ -647,6 +694,9 @@ public struct N: ChatConfigParameter {
 	/// - Throws: ``LLMError/invalidValue(_:)`` if value is not positive
 	public init(_ value: Int) throws {
 		try validatePositive(value, parameterName: "N")
+		guard value <= 128 else {
+			throw LLMError.invalidValue("N must be at most 128, got \(value)")
+		}
 		self.value = value
 	}
 
@@ -712,8 +762,14 @@ public struct LogitBias: ChatConfigParameter {
 	public let value: [String: Int]
 	
 	/// Creates a logit bias configuration parameter.
-	/// - Parameter value: Dictionary of token strings to bias values
-	public init(_ value: [String: Int]) {
+	/// - Parameter value: Dictionary of token strings to bias values (-100 to +100)
+	/// - Throws: ``LLMError/invalidValue(_:)`` if any bias value is outside [-100, 100]
+	public init(_ value: [String: Int]) throws {
+		for (token, bias) in value {
+			guard (-100...100).contains(bias) else {
+				throw LLMError.invalidValue("LogitBias value for token '\(token)' must be between -100 and 100, got \(bias)")
+			}
+		}
 		self.value = value
 	}
 	
@@ -827,9 +883,12 @@ public struct Stop: ChatConfigParameter {
 
 	/// Creates a stop sequences configuration parameter.
 	/// - Parameter value: Array of stop sequences (cannot be empty, maximum 4)
-	/// - Throws: ``LLMError/invalidValue(_:)`` if array is empty
+	/// - Throws: ``LLMError/invalidValue(_:)`` if array is empty or has more than 4 elements
 	public init(_ value: [String]) throws {
 		try validateNotEmpty(value, parameterName: "Stop sequences array")
+		guard value.count <= 4 else {
+			throw LLMError.invalidValue("Stop sequences array must have at most 4 elements, got \(value.count)")
+		}
 		self.value = value
 	}
 
@@ -1826,45 +1885,61 @@ public struct ChatRequest: Encodable, Sendable {
 	///   - config: Configuration parameters using ChatConfigBuilder
 	///   - messages: Messages using ChatBuilder
 	/// - Throws: ``LLMError/missingModel`` if model is empty, or parameter validation errors
-	public init(
-		model: String,
-		stream: Bool = false,
-		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
-		@ChatBuilder messages: () -> [any ChatMessage]
-	) throws {
-		try self.init(model: model, stream: stream, config: config, messages: messages())
-	}
-	
-	/// Creates a new chat completion request with messages only (no configuration).
+	/// Creates a chat completion request using `@SessionBuilder` to declaratively specify
+	/// messages and tool definitions together.
 	///
-	/// Use this simplified initializer when you don't need to specify any configuration
-	/// parameters and want clean, minimal syntax.
+	/// Accepts any `ChatMessage` subtype, bare `Tool` definitions, and `AgentTool` instances
+	/// (handlers are ignored — use `ToolSession` or `Agent` when you need execution).
 	///
 	/// ## Example Usage
 	/// ```swift
-	/// // Simple request with builder syntax
+	/// // Messages only
 	/// let request = try ChatRequest(model: "gpt-4") {
-	///     TextMessage(role: .user, content: "Hello!")
+	///     try Temperature(0.7)
+	/// } configure: {
+	///     System("You are a helpful assistant.")
+	///     User("Hello!")
 	/// }
 	///
-	/// // Streaming request
-	/// let streamRequest = try ChatRequest(model: "gpt-4", stream: true) {
-	///     TextMessage(role: .system, content: "You are helpful.")
-	///     TextMessage(role: .user, content: "Hi!")
+	/// // With tool definitions
+	/// let request = try ChatRequest(model: "gpt-4", toolChoice: .auto) {
+	///     try Temperature(0.7)
+	/// } configure: {
+	///     TextMessage(role: .user, content: "What's the weather?")
+	///     Tool(name: "get_weather", description: "...", parameters: .object(...))
 	/// }
 	/// ```
 	///
 	/// - Parameters:
 	///   - model: The model identifier (cannot be empty)
 	///   - stream: Whether to stream the response (defaults to false)
-	///   - messages: Messages using ChatBuilder
-	/// - Throws: ``LLMError/missingModel`` if model is empty
+	///   - toolChoice: Optional tool choice strategy
+	///   - config: Configuration parameters using ChatConfigBuilder
+	///   - configure: A `@SessionBuilder` block containing messages and/or tool definitions
+	/// - Throws: ``LLMError/missingModel`` if model is empty, or parameter validation errors
 	public init(
 		model: String,
 		stream: Bool = false,
-		@ChatBuilder messages: () -> [any ChatMessage]
+		toolChoice: ToolChoice? = nil,
+		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
+		@SessionBuilder configure: () -> [SessionComponent]
 	) throws {
-		try self.init(model: model, stream: stream, config: {}, messages: messages)
+		let components = configure()
+		var msgs: [any ChatMessage] = []
+		var toolDefs: [Tool] = []
+		for component in components {
+			switch component {
+			case .message(let msg):
+				msgs.append(msg)
+			case .agentTool(let agentTool):
+				toolDefs.append(agentTool.tool)
+			case .toolDefinition(let tool):
+				toolDefs.append(tool)
+			}
+		}
+		try self.init(model: model, stream: stream, config: config, messages: msgs)
+		self.tools = toolDefs.isEmpty ? nil : toolDefs
+		self.toolChoice = toolChoice
 	}
 
 	/// Creates a new chat completion request with a pre-built message array.
@@ -1923,73 +1998,6 @@ public struct ChatRequest: Encodable, Sendable {
 		for parameter in try config() {
 			parameter.apply(to: &self)
 		}
-	}
-
-	/// Creates a chat request with inline tool definitions and optional tool choice.
-	///
-	/// Use this initializer when you want to declare tools alongside configuration
-	/// and messages in a single, readable call site.
-	///
-	/// ## Example Usage
-	/// ```swift
-	/// let request = try ChatRequest(model: "gpt-4", toolChoice: .auto) {
-	///     try Temperature(0.7)
-	/// } tools: {
-	///     Tool(function: Tool.Function(
-	///         name: "get_weather",
-	///         description: "Get weather for a city",
-	///         parameters: .object(
-	///             properties: ["city": .string(description: "City name")],
-	///             required: ["city"]
-	///         )
-	///     ))
-	/// } messages: {
-	///     TextMessage(role: .user, content: "What's the weather?")
-	/// }
-	/// ```
-	///
-	/// - Parameters:
-	///   - model: The model identifier (cannot be empty)
-	///   - stream: Whether to stream the response (defaults to false)
-	///   - toolChoice: Optional tool choice strategy
-	///   - config: Configuration parameters using ChatConfigBuilder
-	///   - tools: Tool definitions using ToolsBuilder
-	///   - messages: Messages using ChatBuilder
-	/// - Throws: ``LLMError/missingModel`` if model is empty, or parameter validation errors
-	public init(
-		model: String,
-		stream: Bool = false,
-		toolChoice: ToolChoice? = nil,
-		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
-		@ToolsBuilder tools: () -> [Tool],
-		@ChatBuilder messages: () -> [any ChatMessage]
-	) throws {
-		try self.init(model: model, stream: stream, config: config, messages: messages())
-		self.tools = tools()
-		self.toolChoice = toolChoice
-	}
-
-	/// Creates a chat request with inline tool definitions and a pre-built message array.
-	///
-	/// - Parameters:
-	///   - model: The model identifier (cannot be empty)
-	///   - stream: Whether to stream the response (defaults to false)
-	///   - toolChoice: Optional tool choice strategy
-	///   - config: Configuration parameters using ChatConfigBuilder
-	///   - tools: Tool definitions using ToolsBuilder
-	///   - messages: Pre-built array of ChatMessage instances
-	/// - Throws: ``LLMError/missingModel`` if model is empty, or parameter validation errors
-	public init(
-		model: String,
-		stream: Bool = false,
-		toolChoice: ToolChoice? = nil,
-		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] },
-		@ToolsBuilder tools: () -> [Tool],
-		messages: [any ChatMessage]
-	) throws {
-		try self.init(model: model, stream: stream, config: config, messages: messages)
-		self.tools = tools()
-		self.toolChoice = toolChoice
 	}
 
 	private enum CodingKeys: String, CodingKey {
@@ -2417,14 +2425,18 @@ public struct ChatResponse: Decodable, Sendable {
 	///
 	/// Contains the role (typically "assistant") and the text content
 	/// generated by the model. When the model returns tool calls, `content`
-	/// may be null in the API response; it decodes as `""` for source compatibility.
+	/// is `null` in the API response and decodes as `nil` here.
+	/// Use `contentOrEmpty` when you need a non-optional string.
 	public struct Message: Decodable, Sendable {
 		/// The role of the message sender (typically "assistant" for responses)
 		public let role: Role
-		/// The text content of the message (null from API decodes as empty string)
-		public let content: String
+		/// The text content of the message, or `nil` if the API returned null (e.g., when tool calls are present)
+		public let content: String?
 		/// Tool calls requested by the model, if any
 		public let toolCalls: [ToolCall]?
+
+		/// The text content, or an empty string if the API returned null.
+		public var contentOrEmpty: String { content ?? "" }
 
 		private enum CodingKeys: String, CodingKey {
 			case role, content
@@ -2434,7 +2446,7 @@ public struct ChatResponse: Decodable, Sendable {
 		public init(from decoder: Decoder) throws {
 			let container = try decoder.container(keyedBy: CodingKeys.self)
 			role = try container.decode(Role.self, forKey: .role)
-			content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+			content = try container.decodeIfPresent(String.self, forKey: .content)
 			toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
 		}
 	}
@@ -2475,8 +2487,20 @@ public struct ChatResponse: Decodable, Sendable {
 /// }
 /// ```
 public struct ChatDelta: Decodable, Sendable {
-	/// Array of delta choices (typically one element for streaming)
+	/// Array of delta choices (typically one element for streaming). Defaults to empty if absent.
 	public let choices: [DeltaChoice]
+	/// Token usage statistics, present in the final chunk when `stream_options.include_usage` is set.
+	public let usage: ChatResponse.Usage?
+
+	private enum CodingKeys: String, CodingKey {
+		case choices, usage
+	}
+
+	public init(from decoder: Decoder) throws {
+		let container = try decoder.container(keyedBy: CodingKeys.self)
+		choices = try container.decodeIfPresent([DeltaChoice].self, forKey: .choices) ?? []
+		usage = try container.decodeIfPresent(ChatResponse.Usage.self, forKey: .usage)
+	}
 
 	/// Represents a single streaming choice with incremental content.
 	public struct DeltaChoice: Decodable, Sendable {
@@ -2516,9 +2540,9 @@ public struct ChatDelta: Decodable, Sendable {
 // MARK: - Response Convenience Extensions
 
 extension ChatResponse {
-	/// Returns the first choice's message content, or nil if no choices exist.
+	/// Returns the first choice's message content, or nil if no choices exist or content is null.
 	public var firstContent: String? {
-		choices.first?.message.content
+		choices.first.flatMap { $0.message.content }
 	}
 
 	/// Returns the finish reason of the first choice, or nil if no choices exist.
@@ -2526,9 +2550,9 @@ extension ChatResponse {
 		choices.first?.finishReason
 	}
 
-	/// Returns total token usage, or 0 if usage data is unavailable.
-	public var totalTokens: Int {
-		usage?.totalTokens ?? 0
+	/// Returns total token usage, or nil if usage data is unavailable.
+	public var totalTokens: Int? {
+		usage?.totalTokens
 	}
 
 	/// Returns the tool calls from the first choice, or nil if none.
@@ -2933,7 +2957,11 @@ public actor LLMClient {
 		} catch let error as LLMError {
 			throw error
 		} catch let urlError as URLError where urlError.code == .timedOut {
-			throw LLMError.networkError("Request timeout exceeded")
+			throw LLMError.requestTimeout
+		} catch let urlError as URLError where urlError.code == .cannotConnectToHost
+			|| urlError.code == .networkConnectionLost
+			|| urlError.code == .notConnectedToInternet {
+			throw LLMError.connectionFailed(urlError.localizedDescription)
 		} catch {
 			throw LLMError.networkError(error.localizedDescription)
 		}
@@ -3045,37 +3073,41 @@ public actor LLMClient {
 	/// - Returns: AsyncStream yielding ``ChatDelta`` objects with incremental response content
 	/// 
 	/// - Note: This method is `nonisolated` for optimal streaming performance while maintaining thread safety.
-	nonisolated public func stream(_ request: ChatRequest) -> AsyncThrowingStream<ChatDelta, Error> {
-		let baseURL = self.baseURL
-		let apiKey = self.apiKey
-		let session = self.session
+	nonisolated public func stream(_ request: ChatRequest) async throws -> AsyncThrowingStream<ChatDelta, Error> {
+		// Validate URL and encode request eagerly so setup errors surface at the call site.
+		var mutableURLRequest = try Self.createURLRequest(baseURL: baseURL, apiKey: apiKey, acceptSSE: true)
+		do {
+			let requestData = try JSONEncoder().encode(request)
+			mutableURLRequest.httpBody = requestData
+		} catch {
+			throw LLMError.encodingFailed(error.localizedDescription)
+		}
+		let urlRequest = mutableURLRequest  // immutable for @Sendable capture
+
+		let capturedSession = session
 
 		return AsyncThrowingStream { continuation in
-			Task { @Sendable in
+			let task = Task { @Sendable in
 				do {
-					var urlRequest = try Self.createURLRequest(baseURL: baseURL, apiKey: apiKey, acceptSSE: true)
-
-					let requestData = try JSONEncoder().encode(request)
-					urlRequest.httpBody = requestData
-
 					// Get cached session with appropriate timeout configuration
-					let sessionToUse = await Self.sessionCache.getSession(
+					let sessionToUse = await LLMClient.sessionCache.getSession(
 						requestTimeout: request.requestTimeout,
 						resourceTimeout: request.resourceTimeout,
-						defaultSession: session
+						defaultSession: capturedSession
 					)
 
 					let (asyncBytes, response) = try await sessionToUse.bytes(for: urlRequest)
 
-					if let error = Self.validateHTTPStatus(response) {
+					if let error = LLMClient.validateHTTPStatus(response) {
 						continuation.finish(throwing: error)
 						return
 					}
-					
+
 					var buffer = ""
 					let maxBufferSize = 1_000_000 // 1MB safety limit for malformed streams
 
 					for try await byte in asyncBytes {
+						try Task.checkCancellation()
 						let character = Character(UnicodeScalar(byte))
 						buffer.append(character)
 
@@ -3089,26 +3121,32 @@ public actor LLMClient {
 						while let eventRange = buffer.range(of: "\n\n") {
 							let event = String(buffer[..<eventRange.lowerBound])
 							buffer.removeSubrange(..<eventRange.upperBound)
-							
+
 							// Parse SSE data lines
 							for line in event.components(separatedBy: "\n") {
 								if line.hasPrefix("data: ") {
 									let data = String(line.dropFirst(6)) // Remove "data: " prefix
-									
+
 									if data == "[DONE]" {
 										continuation.finish()
 										return
 									}
-									
+
 									if let jsonData = data.data(using: .utf8) {
-										let delta = try Self.jsonDecoder.decode(ChatDelta.self, from: jsonData)
-										continuation.yield(delta)
+										do {
+											let delta = try LLMClient.jsonDecoder.decode(ChatDelta.self, from: jsonData)
+											continuation.yield(delta)
+										} catch {
+											continue
+										}
 									}
 								}
 							}
 						}
 					}
-					
+
+					continuation.finish()
+				} catch is CancellationError {
 					continuation.finish()
 				} catch let error as LLMError {
 					continuation.finish(throwing: error)
@@ -3118,6 +3156,7 @@ public actor LLMClient {
 					continuation.finish(throwing: LLMError.networkError(error.localizedDescription))
 				}
 			}
+			continuation.onTermination = { @Sendable _ in task.cancel() }
 		}
 	}
 }
