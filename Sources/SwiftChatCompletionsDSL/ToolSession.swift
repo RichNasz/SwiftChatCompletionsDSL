@@ -86,6 +86,18 @@ public struct ToolCallLogEntry: Sendable {
 	public let duration: Duration
 }
 
+/// Events yielded during a streaming tool-calling loop.
+public enum ToolSessionEvent: Sendable {
+	/// Model returned a response with tool calls (and optional thinking/content text).
+	case modelResponse(content: String?, toolCalls: [ToolCall], iteration: Int)
+	/// A tool execution started.
+	case toolStarted(name: String, arguments: String)
+	/// A tool execution completed.
+	case toolCompleted(name: String, result: String, duration: Duration)
+	/// The final response (no more tool calls). Contains the full ToolSessionResult.
+	case completed(ToolSessionResult)
+}
+
 /// Result of a ToolSession run, containing the final response and execution details.
 public struct ToolSessionResult: Sendable {
 	/// The final chat response (after all tool-calling iterations)
@@ -361,5 +373,165 @@ public struct ToolSession: Sendable {
 		}
 		let messages = initialMessages + [TextMessage(role: .user, content: prompt)]
 		return try await run(model: model, messages: messages)
+	}
+
+	/// Streams the tool-calling loop, yielding events at each step.
+	/// - Parameters:
+	///   - model: The model identifier
+	///   - messages: Initial messages for the conversation
+	///   - config: Optional configuration parameters
+	/// - Returns: An async stream of `ToolSessionEvent` values
+	public func stream(
+		model: String,
+		messages: [any ChatMessage],
+		@ChatConfigBuilder config: () throws -> [ChatConfigParameter] = { [] }
+	) throws -> AsyncThrowingStream<ToolSessionEvent, Error> {
+		try stream(model: model, messages: messages, configParams: config())
+	}
+
+	/// Streams the tool-calling loop with pre-computed configuration parameters.
+	public func stream(
+		model: String,
+		messages: [any ChatMessage],
+		configParams: [ChatConfigParameter]
+	) -> AsyncThrowingStream<ToolSessionEvent, Error> {
+		let tools = self.tools
+		let toolChoice = self.toolChoice
+		let handlers = self.handlers
+		let maxIterations = self.maxIterations
+		let client = self.client
+
+		return AsyncThrowingStream { continuation in
+			let task = Task {
+				var currentMessages = messages
+				var allLog: [ToolCallLogEntry] = []
+				var iterations = 0
+
+				do {
+					while iterations < maxIterations {
+						var request = try ChatRequest(model: model, messages: currentMessages)
+						request.tools = tools
+						request.toolChoice = toolChoice
+						for param in configParams {
+							param.apply(to: &request)
+						}
+
+						let response = try await client.complete(request)
+
+						guard response.requiresToolExecution,
+							  let toolCalls = response.firstToolCalls, !toolCalls.isEmpty else {
+							let result = ToolSessionResult(
+								response: response,
+								messages: currentMessages,
+								iterations: iterations,
+								log: allLog
+							)
+							continuation.yield(.completed(result))
+							continuation.finish()
+							return
+						}
+
+						let assistantContent = response.firstContent
+						continuation.yield(.modelResponse(
+							content: assistantContent?.isEmpty == true ? nil : assistantContent,
+							toolCalls: toolCalls,
+							iteration: iterations
+						))
+
+						currentMessages.append(
+							AssistantToolCallMessage(
+								content: assistantContent?.isEmpty == true ? nil : assistantContent,
+								toolCalls: toolCalls
+							)
+						)
+
+						// Yield toolStarted events before dispatching
+						for toolCall in toolCalls {
+							continuation.yield(.toolStarted(
+								name: toolCall.function.name,
+								arguments: toolCall.function.arguments
+							))
+						}
+
+						// Execute all tool handlers in parallel
+						let results = try await withThrowingTaskGroup(
+							of: (Int, String, ToolCallLogEntry).self
+						) { group in
+							for (index, toolCall) in toolCalls.enumerated() {
+								let handlerName = toolCall.function.name
+								guard let handler = handlers[handlerName] else {
+									throw LLMError.unknownTool(handlerName)
+								}
+
+								group.addTask {
+									let clock = ContinuousClock()
+									let start = clock.now
+									do {
+										let result = try await handler(toolCall.function.arguments)
+										let duration = clock.now - start
+										let logEntry = ToolCallLogEntry(
+											name: handlerName,
+											arguments: toolCall.function.arguments,
+											result: result,
+											duration: duration
+										)
+										return (index, result, logEntry)
+									} catch {
+										throw LLMError.toolExecutionFailed(
+											toolName: handlerName,
+											message: "[\(type(of: error))] \(error.localizedDescription)"
+										)
+									}
+								}
+							}
+
+							var collected: [(Int, String, ToolCallLogEntry)] = []
+							for try await result in group {
+								collected.append(result)
+							}
+							return collected.sorted { $0.0 < $1.0 }
+						}
+
+						for (index, result, logEntry) in results {
+							allLog.append(logEntry)
+							continuation.yield(.toolCompleted(
+								name: logEntry.name,
+								result: result,
+								duration: logEntry.duration
+							))
+							currentMessages.append(
+								ToolResultMessage(
+									toolCallId: toolCalls[index].id,
+									content: result
+								)
+							)
+						}
+
+						iterations += 1
+					}
+
+					continuation.finish(throwing: LLMError.maxIterationsExceeded(maxIterations))
+				} catch {
+					continuation.finish(throwing: error)
+				}
+			}
+
+			continuation.onTermination = { _ in
+				task.cancel()
+			}
+		}
+	}
+
+	/// Streams the tool-calling loop with a user prompt, using the model and messages
+	/// configured via the declarative `@SessionBuilder` initializer.
+	///
+	/// - Parameter prompt: The user's message text
+	/// - Returns: An async stream of `ToolSessionEvent` values
+	public func stream(_ prompt: String) -> AsyncThrowingStream<ToolSessionEvent, Error> {
+		guard let model else {
+			preconditionFailure("stream(_:) requires ToolSession to be created with the declarative init(client:model:configure:) initializer")
+		}
+		let messages = initialMessages + [TextMessage(role: .user, content: prompt)]
+		return stream(model: model, messages: messages, configParams: [])
 	}
 }

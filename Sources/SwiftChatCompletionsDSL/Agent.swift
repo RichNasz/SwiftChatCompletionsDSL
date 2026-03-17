@@ -383,6 +383,127 @@ public actor Agent {
 		try await send(message)
 	}
 
+	/// Sends a user message and streams events from the tool-calling loop.
+	///
+	/// Yields `ToolSessionEvent` values as the model processes tool calls.
+	/// After the stream completes, conversation history and transcript are updated.
+	///
+	/// - Parameter message: The user's message text
+	/// - Returns: An async stream of `ToolSessionEvent` values
+	public func streamSend(_ message: String) -> AsyncThrowingStream<ToolSessionEvent, Error> {
+		conversation.addUser(content: message)
+		_transcript.append(.userMessage(message))
+
+		if tools.isEmpty {
+			let client = self.client
+			let model = self.model
+			let configParams = self.configParams
+			let messagesCopy = conversation.history
+
+			return AsyncThrowingStream { continuation in
+				let task = Task { [weak self] in
+					do {
+						var request = try ChatRequest(model: model, messages: messagesCopy)
+						for param in configParams {
+							param.apply(to: &request)
+						}
+
+						let response = try await client.complete(request)
+						let content = response.firstContent ?? ""
+
+						let result = ToolSessionResult(
+							response: response,
+							messages: messagesCopy,
+							iterations: 0,
+							log: []
+						)
+						continuation.yield(.completed(result))
+						continuation.finish()
+
+						await self?.recordSimpleCompletion(content: content)
+					} catch {
+						continuation.finish(throwing: error)
+					}
+				}
+
+				continuation.onTermination = { _ in
+					task.cancel()
+				}
+			}
+		}
+
+		let session = ToolSession(
+			client: client,
+			tools: tools,
+			toolChoice: toolChoice,
+			maxIterations: maxToolIterations,
+			handlers: toolHandlers
+		)
+
+		let configCopy = configParams
+		let messagesCopy = conversation.history
+		let originalCount = messagesCopy.count
+		let innerStream = session.stream(
+			model: model,
+			messages: messagesCopy,
+			configParams: configCopy
+		)
+
+		return AsyncThrowingStream { continuation in
+			let task = Task { [weak self] in
+				do {
+					for try await event in innerStream {
+						if case .completed(let result) = event {
+							await self?.recordToolSessionCompletion(
+								result: result,
+								originalMessageCount: originalCount
+							)
+						}
+						continuation.yield(event)
+					}
+					continuation.finish()
+				} catch {
+					continuation.finish(throwing: error)
+				}
+			}
+
+			continuation.onTermination = { _ in
+				task.cancel()
+			}
+		}
+	}
+
+	/// Sends a user message and streams events from the tool-calling loop.
+	///
+	/// This is a convenience alias for ``streamSend(_:)``.
+	///
+	/// - Parameter message: The user's message text
+	/// - Returns: An async stream of `ToolSessionEvent` values
+	public func streamRun(_ message: String) -> AsyncThrowingStream<ToolSessionEvent, Error> {
+		streamSend(message)
+	}
+
+	private func recordSimpleCompletion(content: String) {
+		conversation.addAssistant(content: content)
+		_transcript.append(.assistantMessage(content))
+	}
+
+	private func recordToolSessionCompletion(result: ToolSessionResult, originalMessageCount: Int) {
+		for entry in result.log {
+			_transcript.append(.toolCall(name: entry.name, arguments: entry.arguments))
+			_transcript.append(.toolResult(name: entry.name, result: entry.result, duration: entry.duration))
+		}
+
+		let newMessages = result.messages.dropFirst(originalMessageCount)
+		for msg in newMessages {
+			conversation.add(message: msg)
+		}
+
+		let content = result.response.firstContent ?? ""
+		conversation.addAssistant(content: content)
+		_transcript.append(.assistantMessage(content))
+	}
+
 	/// Resets the agent's conversation history and transcript.
 	public func reset() {
 		conversation.clear()

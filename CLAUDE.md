@@ -78,6 +78,8 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - Error context includes error type name in `toolExecutionFailed`
    - Declarative init with `@SessionBuilder` for mixed messages+tools, plus `run(_ prompt:)` shorthand
    - `SessionComponent` enum and `SessionBuilder` result builder for declarative configuration
+   - `stream()` methods return `AsyncThrowingStream<ToolSessionEvent, Error>` for progressive updates
+   - `ToolSessionEvent` enum: `.modelResponse`, `.toolStarted`, `.toolCompleted`, `.completed`
 
 8. **Agent (Actor)**: High-level persistent agent
    - Manages `ChatConversation` for history across multiple `send()` calls
@@ -86,6 +88,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - Builder init with `@AgentToolBuilder` for declarative tool registration (throws on duplicate tool names)
    - Declarative init with `@SessionBuilder` for mixed messages+tools
    - `run(_:)` method as alias for `send(_:)`
+   - `streamSend(_:)` / `streamRun(_:)` return `AsyncThrowingStream<ToolSessionEvent, Error>` for progressive updates
    - Introspection: `registeredToolNames`, `toolCount` computed properties
 
 9. **Response Convenience Extensions**:
@@ -186,7 +189,9 @@ The test suite uses Swift Testing framework and covers:
 - User() convenience function and UserID config parameter coexistence
 - SessionBuilder with messages and tools
 - ToolSession declarative init and run(_ prompt:) shorthand
+- ToolSession stream (basic, no tools needed, multiple iterations, error propagation, max iterations, declarative shorthand)
 - Agent declarative init with @SessionBuilder and run(_:) alias
+- Agent streamSend (basic with tools, no tools, streamRun alias)
 
 ## File Structure
 ```
