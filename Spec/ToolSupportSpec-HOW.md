@@ -39,11 +39,12 @@ Sources/SwiftChatCompletionsDSLMacros/
 
 ### Internal State
 
-Four dictionaries keyed by `Int` (the delta index):
+Five dictionaries keyed by `Int` (the delta index):
 - `ids: [Int: String]` — tool call IDs
 - `types: [Int: String]` — tool call types
 - `names: [Int: String]` — function names
 - `arguments: [Int: String]` — accumulated argument strings
+- `extraContents: [Int: ExtraContent]` — provider-specific extra content (e.g. Gemini thought signatures)
 
 Plus a `maxIndex: Int` tracker initialized to `-1`.
 
@@ -52,7 +53,8 @@ Plus a `maxIndex: Int` tracker initialized to `-1`.
 1. If `delta.index > maxIndex`, update `maxIndex`.
 2. If `delta.id` is non-nil, store/overwrite `ids[index]`.
 3. If `delta.type` is non-nil, store/overwrite `types[index]`.
-4. If `delta.function` is non-nil:
+4. If `delta.extraContent` is non-nil, store/overwrite `extraContents[index]`.
+5. If `delta.function` is non-nil:
    a. If `function.name` is non-nil, store/overwrite `names[index]`.
    b. If `function.arguments` is non-nil, **append** (not replace) to `arguments[index]` using `arguments[index, default: ""].append(args)`. This handles chunked streaming where arguments arrive in fragments.
 
@@ -63,11 +65,11 @@ Plus a `maxIndex: Int` tracker initialized to `-1`.
    a. Require both `ids[i]` and `names[i]` — skip index if either is missing.
    b. Use `types[i] ?? "function"` for the type (defaults if not received).
    c. Use `arguments[i] ?? ""` for the arguments (empty if no argument chunks received).
-   d. Construct `ToolCall(id:type:function:)` with a `ToolCall.FunctionCall(name:arguments:)`.
+   d. Construct `ToolCall(id:type:function:extraContent:)` with a `ToolCall.FunctionCall(name:arguments:)`, passing `extraContents[i]`.
 
 ### `reset()`
 
-Clear all four dictionaries (`removeAll()`) and set `maxIndex = -1`.
+Clear all five dictionaries (`removeAll()`) and set `maxIndex = -1`.
 
 ## Core Types Location
 

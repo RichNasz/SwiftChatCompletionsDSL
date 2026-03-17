@@ -60,9 +60,11 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 
 6. **Tool Calling Types**:
    - `JSONSchema`: Type-safe JSON Schema representation (indirect enum, cases: `object`, `array`, `string`, `integer`, `number`, `boolean`, `null`)
-   - `ToolCall` / `ToolCallDelta`: Parsed tool calls from non-streaming / streaming responses (with public inits)
+   - `ExtraContent`: Provider-specific extra content (e.g. Gemini `thought_signature` at `extra_content.google.thought_signature`); nested `GoogleContent` struct with `CodingKeys`
+   - `ToolCall` / `ToolCallDelta`: Parsed tool calls from non-streaming / streaming responses (with public inits); include optional `extraContent: ExtraContent?` (mapped to `extra_content` via CodingKeys)
+   - `ToolCall.FunctionCall` / `ToolCallDelta.FunctionCallDelta`: `name` + `arguments` only (no provider-specific fields)
    - `ToolCall.decodeArguments()`: Generic helper to decode raw JSON arguments into typed Swift values
-   - `ToolCallAccumulator`: Accumulates streaming `ToolCallDelta` chunks into complete `ToolCall` objects
+   - `ToolCallAccumulator`: Accumulates streaming `ToolCallDelta` chunks into complete `ToolCall` objects; preserves `extraContent` through accumulation
    - `ToolChoice`: Controls model tool selection (`auto`, `none`, `required`, `function(name)`)
    - `AssistantToolCallMessage`: Message type for assistant tool call requests
    - `ToolResultMessage`: Message type for tool execution results
@@ -95,7 +97,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 
 ### JSON Serialization
 - Uses `CodingKeys` to map Swift camelCase to OpenAI snake_case format
-- Example: `maxTokens` → `max_tokens`, `topP` → `top_p`, `toolCalls` → `tool_calls`
+- Example: `maxTokens` → `max_tokens`, `topP` → `top_p`, `toolCalls` → `tool_calls`, `extraContent` → `extra_content`
 - `ChatResponse.Message.content` decodes `null` as `""` for source compatibility
 
 ### Error Handling
@@ -146,6 +148,7 @@ Custom `LLMError` enum covers:
 - `Agent` uses `ToolSession` internally for automatic tool-calling loops
 - `ToolCall.decodeArguments()` provides typed argument decoding, wrapping errors as `LLMError.decodingFailed`
 - `ToolCallAccumulator` assembles streaming `ToolCallDelta` chunks into complete `ToolCall` objects
+- Gemini thinking model support: `ExtraContent` struct models `extra_content.google.thought_signature`; stored on `ToolCall.extraContent` and `ToolCallDelta.extraContent` (not inside `FunctionCall`). Optional with `nil` default; flows through accumulation and Codable round-trips automatically.
 - Duplicate tool name detection: `precondition` in `ToolSession`/`Agent` explicit init, `throws` in `Agent` builder init
 - `requiresToolExecution` checks only `firstToolCalls` (not `firstFinishReason`) for provider compatibility
 

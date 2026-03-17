@@ -1008,6 +1008,27 @@ extension JSONSchemaValue {
 
 // MARK: - Tool Call Types
 
+/// Provider-specific extra content attached to tool calls (e.g. Gemini thought signatures).
+public struct ExtraContent: Codable, Sendable, Equatable {
+	public let google: GoogleContent?
+
+	public struct GoogleContent: Codable, Sendable, Equatable {
+		public let thoughtSignature: String?
+
+		private enum CodingKeys: String, CodingKey {
+			case thoughtSignature = "thought_signature"
+		}
+
+		public init(thoughtSignature: String?) {
+			self.thoughtSignature = thoughtSignature
+		}
+	}
+
+	public init(google: GoogleContent?) {
+		self.google = google
+	}
+}
+
 /// Represents a tool call returned by the model in a non-streaming response.
 public struct ToolCall: Codable, Sendable, Equatable {
 	/// Unique identifier for this tool call
@@ -1016,16 +1037,25 @@ public struct ToolCall: Codable, Sendable, Equatable {
 	public let type: String
 	/// The function call details
 	public let function: FunctionCall
+	/// Provider-specific extra content (e.g. Gemini thought signatures)
+	public let extraContent: ExtraContent?
+
+	private enum CodingKeys: String, CodingKey {
+		case id, type, function
+		case extraContent = "extra_content"
+	}
 
 	/// Creates a new ToolCall.
 	/// - Parameters:
 	///   - id: Unique identifier for this tool call
 	///   - type: The type of tool call (defaults to "function")
 	///   - function: The function call details
-	public init(id: String, type: String = "function", function: FunctionCall) {
+	///   - extraContent: Provider-specific extra content
+	public init(id: String, type: String = "function", function: FunctionCall, extraContent: ExtraContent? = nil) {
 		self.id = id
 		self.type = type
 		self.function = function
+		self.extraContent = extraContent
 	}
 
 	/// Represents the function name and arguments in a tool call.
@@ -1034,23 +1064,14 @@ public struct ToolCall: Codable, Sendable, Equatable {
 		public let name: String
 		/// The arguments as a raw JSON string
 		public let arguments: String
-		/// Encrypted thought signature from Gemini thinking models (echoed back verbatim)
-		public let thoughtSignature: String?
-
-		private enum CodingKeys: String, CodingKey {
-			case name, arguments
-			case thoughtSignature = "thought_signature"
-		}
 
 		/// Creates a new FunctionCall.
 		/// - Parameters:
 		///   - name: The name of the function to call
 		///   - arguments: The arguments as a raw JSON string
-		///   - thoughtSignature: Encrypted thought signature from Gemini thinking models
-		public init(name: String, arguments: String, thoughtSignature: String? = nil) {
+		public init(name: String, arguments: String) {
 			self.name = name
 			self.arguments = arguments
-			self.thoughtSignature = thoughtSignature
 		}
 	}
 
@@ -1081,17 +1102,27 @@ public struct ToolCallDelta: Codable, Sendable, Equatable {
 	/// Incremental function call data
 	public let function: FunctionCallDelta?
 
+	/// Provider-specific extra content (e.g. Gemini thought signatures)
+	public let extraContent: ExtraContent?
+
+	private enum CodingKeys: String, CodingKey {
+		case index, id, type, function
+		case extraContent = "extra_content"
+	}
+
 	/// Creates a new ToolCallDelta.
 	/// - Parameters:
 	///   - index: Index of this tool call in the array
 	///   - id: Tool call ID (present in first chunk)
 	///   - type: Tool call type (present in first chunk)
 	///   - function: Incremental function call data
-	public init(index: Int, id: String? = nil, type: String? = nil, function: FunctionCallDelta? = nil) {
+	///   - extraContent: Provider-specific extra content
+	public init(index: Int, id: String? = nil, type: String? = nil, function: FunctionCallDelta? = nil, extraContent: ExtraContent? = nil) {
 		self.index = index
 		self.id = id
 		self.type = type
 		self.function = function
+		self.extraContent = extraContent
 	}
 
 	/// Incremental function call data from a streaming delta.
@@ -1100,23 +1131,14 @@ public struct ToolCallDelta: Codable, Sendable, Equatable {
 		public let name: String?
 		/// Incremental arguments string
 		public let arguments: String?
-		/// Encrypted thought signature from Gemini thinking models (echoed back verbatim)
-		public let thoughtSignature: String?
-
-		private enum CodingKeys: String, CodingKey {
-			case name, arguments
-			case thoughtSignature = "thought_signature"
-		}
 
 		/// Creates a new FunctionCallDelta.
 		/// - Parameters:
 		///   - name: Function name (present in first chunk)
 		///   - arguments: Incremental arguments string
-		///   - thoughtSignature: Encrypted thought signature from Gemini thinking models
-		public init(name: String? = nil, arguments: String? = nil, thoughtSignature: String? = nil) {
+		public init(name: String? = nil, arguments: String? = nil) {
 			self.name = name
 			self.arguments = arguments
-			self.thoughtSignature = thoughtSignature
 		}
 	}
 }
@@ -1144,7 +1166,7 @@ public struct ToolCallAccumulator: Sendable {
 	private var types: [Int: String] = [:]
 	private var names: [Int: String] = [:]
 	private var arguments: [Int: String] = [:]
-	private var thoughtSignatures: [Int: String] = [:]
+	private var extraContents: [Int: ExtraContent] = [:]
 	private var maxIndex: Int = -1
 
 	/// Creates a new empty accumulator.
@@ -1162,15 +1184,15 @@ public struct ToolCallAccumulator: Sendable {
 		if let type = delta.type {
 			types[idx] = type
 		}
+		if let ec = delta.extraContent {
+			extraContents[idx] = ec
+		}
 		if let fn = delta.function {
 			if let name = fn.name {
 				names[idx] = name
 			}
 			if let args = fn.arguments {
 				arguments[idx, default: ""].append(args)
-			}
-			if let sig = fn.thoughtSignature {
-				thoughtSignatures[idx] = sig
 			}
 		}
 	}
@@ -1185,9 +1207,9 @@ public struct ToolCallAccumulator: Sendable {
 				type: types[idx] ?? "function",
 				function: ToolCall.FunctionCall(
 					name: name,
-					arguments: arguments[idx] ?? "",
-					thoughtSignature: thoughtSignatures[idx]
-				)
+					arguments: arguments[idx] ?? ""
+				),
+				extraContent: extraContents[idx]
 			)
 		}
 	}
@@ -1198,7 +1220,7 @@ public struct ToolCallAccumulator: Sendable {
 		types.removeAll()
 		names.removeAll()
 		arguments.removeAll()
-		thoughtSignatures.removeAll()
+		extraContents.removeAll()
 		maxIndex = -1
 	}
 }

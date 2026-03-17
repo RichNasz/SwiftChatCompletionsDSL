@@ -15,9 +15,10 @@ Type-safe JSON Schema representation replacing `[String: String]` for tool param
 ### ToolCall (struct)
 Parsed tool call from a non-streaming API response.
 
-- **Fields**: `id: String`, `type: String`, `function: FunctionCall`
+- **Fields**: `id: String`, `type: String`, `function: FunctionCall`, `extraContent: ExtraContent?`
 - **FunctionCall**: `name: String`, `arguments: String` (raw JSON)
-- **Public inits**: Both `ToolCall` and `FunctionCall` have explicit public initializers. `ToolCall.init` has `type: String = "function"` default.
+- **CodingKeys**: `extra_content` maps to `extraContent`
+- **Public inits**: Both `ToolCall` and `FunctionCall` have explicit public initializers. `ToolCall.init` has `type: String = "function"` and `extraContent: ExtraContent? = nil` defaults.
 - **Conformance**: `Codable`, `Sendable`
 - **decodeArguments()**: Generic helper to decode raw JSON arguments into typed Swift values:
   ```swift
@@ -28,9 +29,10 @@ Parsed tool call from a non-streaming API response.
 ### ToolCallDelta (struct)
 Incremental tool call from a streaming delta.
 
-- **Fields**: `index: Int`, `id: String?`, `type: String?`, `function: FunctionCallDelta?`
+- **Fields**: `index: Int`, `id: String?`, `type: String?`, `function: FunctionCallDelta?`, `extraContent: ExtraContent?`
 - **FunctionCallDelta**: `name: String?`, `arguments: String?`
-- **Public inits**: Both `ToolCallDelta` and `FunctionCallDelta` have explicit public initializers
+- **CodingKeys**: `extra_content` maps to `extraContent`
+- **Public inits**: Both `ToolCallDelta` and `FunctionCallDelta` have explicit public initializers. `ToolCallDelta.init` has `extraContent: ExtraContent? = nil` default.
 - **Conformance**: `Codable`, `Sendable`
 
 ### ToolCallAccumulator (struct)
@@ -40,6 +42,7 @@ Accumulates streaming `ToolCallDelta` chunks into complete `ToolCall` objects.
 - **Properties**: `toolCalls: [ToolCall]` returns accumulated complete tool calls ordered by index
 - **Conformance**: `Sendable`
 - **Purpose**: Eliminates boilerplate of manually tracking and concatenating partial id, name, and argument fragments during streaming
+- **Gemini support**: Preserves `extraContent` from deltas and passes it through to assembled `ToolCall` objects
 
 ### ToolChoice (enum)
 Controls model tool selection behavior.
