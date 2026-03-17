@@ -1034,14 +1034,23 @@ public struct ToolCall: Codable, Sendable, Equatable {
 		public let name: String
 		/// The arguments as a raw JSON string
 		public let arguments: String
+		/// Encrypted thought signature from Gemini thinking models (echoed back verbatim)
+		public let thoughtSignature: String?
+
+		private enum CodingKeys: String, CodingKey {
+			case name, arguments
+			case thoughtSignature = "thought_signature"
+		}
 
 		/// Creates a new FunctionCall.
 		/// - Parameters:
 		///   - name: The name of the function to call
 		///   - arguments: The arguments as a raw JSON string
-		public init(name: String, arguments: String) {
+		///   - thoughtSignature: Encrypted thought signature from Gemini thinking models
+		public init(name: String, arguments: String, thoughtSignature: String? = nil) {
 			self.name = name
 			self.arguments = arguments
+			self.thoughtSignature = thoughtSignature
 		}
 	}
 
@@ -1091,14 +1100,23 @@ public struct ToolCallDelta: Codable, Sendable, Equatable {
 		public let name: String?
 		/// Incremental arguments string
 		public let arguments: String?
+		/// Encrypted thought signature from Gemini thinking models (echoed back verbatim)
+		public let thoughtSignature: String?
+
+		private enum CodingKeys: String, CodingKey {
+			case name, arguments
+			case thoughtSignature = "thought_signature"
+		}
 
 		/// Creates a new FunctionCallDelta.
 		/// - Parameters:
 		///   - name: Function name (present in first chunk)
 		///   - arguments: Incremental arguments string
-		public init(name: String? = nil, arguments: String? = nil) {
+		///   - thoughtSignature: Encrypted thought signature from Gemini thinking models
+		public init(name: String? = nil, arguments: String? = nil, thoughtSignature: String? = nil) {
 			self.name = name
 			self.arguments = arguments
+			self.thoughtSignature = thoughtSignature
 		}
 	}
 }
@@ -1126,6 +1144,7 @@ public struct ToolCallAccumulator: Sendable {
 	private var types: [Int: String] = [:]
 	private var names: [Int: String] = [:]
 	private var arguments: [Int: String] = [:]
+	private var thoughtSignatures: [Int: String] = [:]
 	private var maxIndex: Int = -1
 
 	/// Creates a new empty accumulator.
@@ -1150,6 +1169,9 @@ public struct ToolCallAccumulator: Sendable {
 			if let args = fn.arguments {
 				arguments[idx, default: ""].append(args)
 			}
+			if let sig = fn.thoughtSignature {
+				thoughtSignatures[idx] = sig
+			}
 		}
 	}
 
@@ -1163,7 +1185,8 @@ public struct ToolCallAccumulator: Sendable {
 				type: types[idx] ?? "function",
 				function: ToolCall.FunctionCall(
 					name: name,
-					arguments: arguments[idx] ?? ""
+					arguments: arguments[idx] ?? "",
+					thoughtSignature: thoughtSignatures[idx]
 				)
 			)
 		}
@@ -1175,6 +1198,7 @@ public struct ToolCallAccumulator: Sendable {
 		types.removeAll()
 		names.removeAll()
 		arguments.removeAll()
+		thoughtSignatures.removeAll()
 		maxIndex = -1
 	}
 }
