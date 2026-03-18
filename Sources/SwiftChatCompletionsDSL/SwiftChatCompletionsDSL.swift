@@ -7,7 +7,7 @@
 //
 
 import Foundation
-import SwiftChatCompletionsMacros
+import SwiftLLMToolMacros
 
 // MARK: - Type Aliases
 
@@ -972,7 +972,7 @@ public struct ResourceTimeout: ChatConfigParameter {
 
 /// Type alias for the macros package JSON Schema type.
 ///
-/// `JSONSchema` is an alias for `JSONSchemaValue` from `SwiftChatCompletionsMacros`.
+/// `JSONSchema` is an alias for `JSONSchemaValue` from `SwiftLLMToolMacros`.
 /// Use the static factory methods to construct schemas:
 ///
 /// ```swift
@@ -1293,7 +1293,7 @@ public struct ToolChoiceParam: ChatConfigParameter {
 
 /// Type alias for the macros package tool definition type.
 ///
-/// `Tool` is an alias for `ToolDefinition` from `SwiftChatCompletionsMacros`.
+/// `Tool` is an alias for `ToolDefinition` from `SwiftLLMToolMacros`.
 /// Use the flat initializer to create tools:
 ///
 /// ```swift

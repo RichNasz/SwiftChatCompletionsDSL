@@ -1,5 +1,5 @@
 {
-  "originHash" : "20b022afdb13562bfd36683e18bc39ff91efa0eaae4be502cb931f16c308cce4",
+  "originHash" : "0b52ffc32aae443bf6aee0c5e57e2d9205b8fbb12d1eb760e18d3572554b4c63",
   "pins" : [
     {
       "identity" : "swift-syntax",
@@ -8,15 +8,6 @@
       "state" : {
         "revision" : "4799286537280063c85a32f09884cfbca301b1a1",
         "version" : "602.0.0"
-      }
-    },
-    {
-      "identity" : "swiftchatcompletionsmacros",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/RichNasz/SwiftChatCompletionsMacros.git",
-      "state" : {
-        "revision" : "cf43e25d017991e61fa1528e3be14bc40345581c",
-        "version" : "0.1.1"
       }
     }
   ],

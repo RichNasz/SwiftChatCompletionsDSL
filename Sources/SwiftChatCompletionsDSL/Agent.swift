@@ -7,7 +7,7 @@
 //
 
 import Foundation
-import SwiftChatCompletionsMacros
+import SwiftLLMToolMacros
 
 // MARK: - Agent
 
@@ -41,13 +41,13 @@ public struct AgentTool: Sendable {
 		self.handler = handler
 	}
 
-	/// Creates an AgentTool from a `ChatCompletionsTool` instance.
+	/// Creates an AgentTool from a `LLMTool` instance.
 	///
 	/// Bridges macro-generated tool types with the Agent system by wrapping
 	/// the tool's `call(arguments:)` method to handle JSON argument decoding.
 	///
-	/// - Parameter instance: An instance of the `ChatCompletionsTool`-conforming type
-	public init<T: ChatCompletionsTool>(_ instance: T) {
+	/// - Parameter instance: An instance of the `LLMTool`-conforming type
+	public init<T: LLMTool>(_ instance: T) {
 		let definition = T.toolDefinition
 		self.init(tool: definition) { argumentsJSON in
 			guard let data = argumentsJSON.data(using: .utf8) else {

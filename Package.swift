@@ -16,13 +16,13 @@ let package = Package(
 		),
 	],
 	dependencies: [
-		.package(url: "https://github.com/RichNasz/SwiftChatCompletionsMacros.git", from: "0.1.1"),
+		.package(path: "../SwiftLLMToolMacros"),
 	],
 	targets: [
 		.target(
 			name: "SwiftChatCompletionsDSL",
 			dependencies: [
-				.product(name: "SwiftChatCompletionsMacros", package: "SwiftChatCompletionsMacros"),
+				.product(name: "SwiftLLMToolMacros", package: "SwiftLLMToolMacros"),
 			]
 		),
 		.testTarget(

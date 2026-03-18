@@ -112,13 +112,13 @@ let weatherTool = Tool(function: Tool.Function(
 ))
 ```
 
-### Macro-Powered Tools (with SwiftChatCompletionsMacros)
+### Macro-Powered Tools (with SwiftLLMToolMacros)
 
-For the most ergonomic tool definitions, use the companion [SwiftChatCompletionsMacros](https://github.com/RichNasz/SwiftChatCompletionsMacros) package:
+For the most ergonomic tool definitions, use the companion [SwiftLLMToolMacros](https://github.com/RichNasz/SwiftLLMToolMacros) package:
 
 ```swift
 import SwiftChatCompletionsDSLMacros
-import SwiftChatCompletionsMacros
+import SwiftLLMToolMacros
 
 @ChatCompletionsToolArguments
 struct WeatherArgs {
@@ -356,7 +356,7 @@ All parameters validate ranges at construction time:
 ```
 Products:
   SwiftChatCompletionsDSL          # Core library (zero dependencies)
-  SwiftChatCompletionsDSLMacros    # Bridge to SwiftChatCompletionsMacros
+  SwiftChatCompletionsDSLMacros    # Bridge to SwiftLLMToolMacros
 
 Targets:
   SwiftChatCompletionsDSL          # Core (Foundation only)
@@ -369,7 +369,7 @@ Targets:
 - **Swift**: 6.2 or later
 - **Platforms**: macOS 13.0+, iOS 16.0+
 - **Core Dependencies**: None (Foundation only)
-- **Macros Bridge**: Requires [SwiftChatCompletionsMacros](https://github.com/RichNasz/SwiftChatCompletionsMacros)
+- **Macros Bridge**: Requires [SwiftLLMToolMacros](https://github.com/RichNasz/SwiftLLMToolMacros)
 
 ## Contributing
 

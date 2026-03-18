@@ -19,7 +19,7 @@ Assistant("The weather is sunny.")       // TextMessage(role: .assistant, conten
 
 These work anywhere `TextMessage` works, including `@ChatBuilder` and `@SessionBuilder` blocks. `User()` is the preferred shorthand (coexists with the `UserID` config parameter because Swift resolves by return type in builder context). `UserMessage()` is retained for compatibility. `Assistant()` is useful for building conversation history and few-shot examples.
 
-### Macro-Powered Tools (via SwiftChatCompletionsMacros)
+### Macro-Powered Tools (via SwiftLLMToolMacros)
 
 Using the companion macros package for zero-boilerplate tool definitions:
 

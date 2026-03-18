@@ -8,7 +8,7 @@
 
 import Foundation
 import Testing
-import SwiftChatCompletionsMacros
+import SwiftLLMToolMacros
 @testable import SwiftChatCompletionsDSL
 
 // MARK: - Basic ChatRequest Tests

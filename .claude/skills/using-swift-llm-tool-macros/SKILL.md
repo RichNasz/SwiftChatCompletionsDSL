@@ -1,14 +1,14 @@
 ---
-name: using-swift-chat-completions-macros
+name: using-swift-llm-tool-macros
 description: >
-  Helps the agent use the SwiftChatCompletionsMacros Swift package to define
+  Helps the agent use the SwiftLLMToolMacros Swift package to define
   OpenAI-compatible tool definitions at compile time using @ChatCompletionsTool,
   @ChatCompletionsToolArguments, and @ChatCompletionsToolGuide macros. Useful when
   building function calling, JSON Schema generation, or chat completions tooling
   in Swift. The macro names avoid conflicts with Apple FoundationModels.
 ---
 
-# Using SwiftChatCompletionsMacros
+# Using SwiftLLMToolMacros
 
 ## Installation
 
@@ -16,20 +16,20 @@ Add to `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/RichNasz/SwiftChatCompletionsMacros.git", from: "0.1.0")
+    .package(url: "https://github.com/RichNasz/SwiftLLMToolMacros.git", from: "0.1.0")
 ]
 ```
 
 Add the dependency to your target:
 
 ```swift
-.target(name: "YourTarget", dependencies: ["SwiftChatCompletionsMacros"])
+.target(name: "YourTarget", dependencies: ["SwiftLLMToolMacros"])
 ```
 
 Import in source files:
 
 ```swift
-import SwiftChatCompletionsMacros
+import SwiftLLMToolMacros
 ```
 
 ## Macros

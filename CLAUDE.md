@@ -26,7 +26,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 - **Type Safety**: Enforces roles, parameters, and responses at compile time
 - **Swift Concurrency**: Built with `async`/`await` and actors for thread-safe operations
 - **Value Types**: Uses structs for performance and immutability
-- **Macros Integration**: Core target depends on `SwiftChatCompletionsMacros`; `JSONSchema` and `Tool` are typealiases for macros types
+- **Macros Integration**: Core target depends on `SwiftLLMToolMacros`; `JSONSchema` and `Tool` are typealiases for macros types
 
 ### Key Components
 
@@ -120,10 +120,10 @@ Custom `LLMError` enum covers:
 ## Package Structure
 
 ### Products
-- **SwiftChatCompletionsDSL**: Core library (depends on SwiftChatCompletionsMacros)
+- **SwiftChatCompletionsDSL**: Core library (depends on SwiftLLMToolMacros)
 
 ### Targets
-- **SwiftChatCompletionsDSL**: Core target (depends on SwiftChatCompletionsMacros)
+- **SwiftChatCompletionsDSL**: Core target (depends on SwiftLLMToolMacros)
 - **SwiftChatCompletionsDSLTests**: Tests for core target
 
 ## Implementation Details
@@ -144,8 +144,8 @@ Custom `LLMError` enum covers:
 - Returns `AsyncThrowingStream<ChatDelta, Error>` for real-time content streaming
 
 ### Tool Calling
-- `Tool` is a typealias for `ToolDefinition` from `SwiftChatCompletionsMacros`; use `Tool(name:description:parameters:)` directly
-- `JSONSchema` is a typealias for `JSONSchemaValue` from `SwiftChatCompletionsMacros`; dict convenience `object(properties:[String:JSONSchemaValue], required:)` adds dictionary syntax
+- `Tool` is a typealias for `ToolDefinition` from `SwiftLLMToolMacros`; use `Tool(name:description:parameters:)` directly
+- `JSONSchema` is a typealias for `JSONSchemaValue` from `SwiftLLMToolMacros`; dict convenience `object(properties:[String:JSONSchemaValue], required:)` adds dictionary syntax
 - `ToolSession.ToolHandler` signature: `@Sendable (String) async throws -> String`
 - Parallel tool execution via `withThrowingTaskGroup` when API returns multiple tool_calls
 - `Agent` uses `ToolSession` internally for automatic tool-calling loops
@@ -217,8 +217,8 @@ Spec/
 Examples/
 ├── BasicUsage.swift                         # Usage examples
 .claude/skills/
-├── using-swift-chat-completions-macros/     # Macro usage skill for AI assistants
+├── using-swift-llm-tool-macros/     # Macro usage skill for AI assistants
 │   └── SKILL.md
 ```
 
-The project follows Swift Package Manager conventions with core types in the main source file and tool orchestration (ToolSession, Agent) in separate files. The core target depends directly on `SwiftChatCompletionsMacros`, with `JSONSchema` and `Tool` as typealiases for macros types.
+The project follows Swift Package Manager conventions with core types in the main source file and tool orchestration (ToolSession, Agent) in separate files. The core target depends directly on `SwiftLLMToolMacros`, with `JSONSchema` and `Tool` as typealiases for macros types.
