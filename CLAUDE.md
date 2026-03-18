@@ -79,8 +79,10 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
    - Error context includes error type name in `toolExecutionFailed`
    - Declarative init with `@SessionBuilder` for mixed messages+tools, plus `run(_ prompt:)` shorthand
    - `SessionComponent` enum and `SessionBuilder` result builder for declarative configuration
-   - `stream()` methods return `AsyncThrowingStream<ToolSessionEvent, Error>` for progressive updates
-   - `ToolSessionEvent` enum: `.modelResponse`, `.toolStarted`, `.toolCompleted`, `.completed`
+   - `stream()` methods return `AsyncThrowingStream<ToolSessionEvent, Error>` with true SSE token-level streaming
+   - `ToolSessionEvent` enum: `.textDelta`, `.modelResponse`, `.toolStarted`, `.toolCompleted`, `.completed`
+   - `stream()` uses `client.stream()` (SSE) internally; yields `.textDelta(String)` for each token as it arrives
+   - Synthesizes a `ChatResponse` from accumulated streaming data for the `.completed` result
 
 8. **Agent (Actor)**: High-level persistent agent
    - Manages `ChatConversation` for history across multiple `send()` calls
@@ -190,7 +192,7 @@ The test suite uses Swift Testing framework and covers:
 - User() convenience function and UserID config parameter coexistence
 - SessionBuilder with messages and tools
 - ToolSession declarative init and run(_ prompt:) shorthand
-- ToolSession stream (basic, no tools needed, multiple iterations, error propagation, max iterations, declarative shorthand)
+- ToolSession stream with SSE token-level streaming (basic with textDelta, no tools needed, multiple iterations, error propagation, max iterations, declarative shorthand)
 - Agent declarative init with @SessionBuilder and run(_:) alias
 - Agent streamSend (basic with tools, no tools, streamRun alias)
 - **Live endpoint tests** (opt-in via `LIVE_TEST=1` env var, skipped by default):
@@ -212,7 +214,7 @@ Sources/SwiftChatCompletionsDSL/
 │   ├── DSL.md                               # DSL guide for beginners
 │   └── Usage.md                             # Usage examples
 Tests/SwiftChatCompletionsDSLTests/
-├── SwiftChatCompletionsDSLTests.swift      # All test cases (136 simulated tests)
+├── SwiftChatCompletionsDSLTests.swift      # All test cases (140 simulated tests)
 ├── LiveEndpointTests.swift                 # Opt-in live endpoint integration tests (4 tests, requires LIVE_TEST=1)
 Spec/
 ├── SwiftChatCompletionsDSL.md              # Core public API specification

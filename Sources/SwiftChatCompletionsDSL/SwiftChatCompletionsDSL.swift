@@ -2457,6 +2457,12 @@ public struct ChatResponse: Decodable, Sendable {
 			case message
 			case finishReason = "finish_reason"
 		}
+
+		internal init(index: Int, message: Message, finishReason: String?) {
+			self.index = index
+			self.message = message
+			self.finishReason = finishReason
+		}
 	}
 
 	/// Represents a message in the API response.
@@ -2483,6 +2489,12 @@ public struct ChatResponse: Decodable, Sendable {
 			content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
 			toolCalls = try container.decodeIfPresent([ToolCall].self, forKey: .toolCalls)
 		}
+
+		internal init(role: Role, content: String, toolCalls: [ToolCall]?) {
+			self.role = role
+			self.content = content
+			self.toolCalls = toolCalls
+		}
 	}
 
 	/// Token usage statistics for the API request.
@@ -2501,6 +2513,32 @@ public struct ChatResponse: Decodable, Sendable {
 			case completionTokens = "completion_tokens"
 			case totalTokens = "total_tokens"
 		}
+	}
+
+	/// Creates a synthetic ChatResponse from accumulated streaming data.
+	internal init(
+		id: String,
+		model: String,
+		content: String,
+		toolCalls: [ToolCall]?,
+		finishReason: String?
+	) {
+		self.id = id
+		self.object = "chat.completion"
+		self.created = Int(Date().timeIntervalSince1970)
+		self.model = model
+		self.choices = [
+			Choice(
+				index: 0,
+				message: Message(
+					role: .assistant,
+					content: content,
+					toolCalls: toolCalls
+				),
+				finishReason: finishReason
+			)
+		]
+		self.usage = nil
 	}
 }
 

@@ -193,6 +193,45 @@ await agent.reset()
 
 Both `send(_:)` and `run(_:)` return `String` (the assistant's text response). `run(_:)` is an alias for `send(_:)`. `reset()` clears conversation history and transcript. Duplicate tool names in the builder/declarative init throw `LLMError.invalidValue`. The explicit init uses a `precondition`.
 
+### Streaming with Token-Level Events
+
+Both `ToolSession` and `Agent` support streaming via `stream()` / `streamSend()` / `streamRun()`, returning `AsyncThrowingStream<ToolSessionEvent, Error>`.
+
+**ToolSessionEvent cases:**
+- `.textDelta(String)` — Incremental text token from the model's SSE stream, yielded as each token arrives for real-time UI updates
+- `.modelResponse(content:toolCalls:iteration:)` — Model returned tool calls (emitted after SSE stream completes for that turn)
+- `.toolStarted(name:arguments:)` — A tool execution started
+- `.toolCompleted(name:result:duration:)` — A tool execution completed
+- `.completed(ToolSessionResult)` — Final response with no more tool calls
+
+```swift
+// ToolSession streaming
+let session = ToolSession(client: client, model: "gpt-4o") {
+    System("You are a helpful assistant.")
+    AgentTool(tool: weatherTool) { args in "{\"temp\": 72}" }
+}
+
+for try await event in session.stream("Weather in Paris?") {
+    switch event {
+    case .textDelta(let token):
+        print(token, terminator: "")   // Real-time token display
+    case .completed(let result):
+        print("\nDone: \(result.response.firstContent ?? "")")
+    default: break
+    }
+}
+
+// Agent streaming (events flow through automatically)
+let stream = await agent.streamRun("Weather in Paris?")
+for try await event in stream {
+    if case .textDelta(let token) = event {
+        print(token, terminator: "")
+    }
+}
+```
+
+The streaming methods use `client.stream()` (SSE) internally and synthesize a `ChatResponse` from accumulated stream data for the `ToolSessionResult`. The non-streaming `run()` methods continue using `client.complete()`.
+
 ### Error Handling
 
 ```swift

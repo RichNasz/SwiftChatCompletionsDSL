@@ -88,6 +88,8 @@ public struct ToolCallLogEntry: Sendable {
 
 /// Events yielded during a streaming tool-calling loop.
 public enum ToolSessionEvent: Sendable {
+	/// Incremental text token from the model's response.
+	case textDelta(String)
 	/// Model returned a response with tool calls (and optional thinking/content text).
 	case modelResponse(content: String?, toolCalls: [ToolCall], iteration: Int)
 	/// A tool execution started.
@@ -390,6 +392,9 @@ public struct ToolSession: Sendable {
 	}
 
 	/// Streams the tool-calling loop with pre-computed configuration parameters.
+	///
+	/// Uses true SSE streaming (`client.stream()`) to yield `.textDelta` events
+	/// as tokens arrive from the model, enabling real-time UI updates.
 	public func stream(
 		model: String,
 		messages: [any ChatMessage],
@@ -409,17 +414,46 @@ public struct ToolSession: Sendable {
 
 				do {
 					while iterations < maxIterations {
-						var request = try ChatRequest(model: model, messages: currentMessages)
+						var request = try ChatRequest(model: model, stream: true, messages: currentMessages)
 						request.tools = tools
 						request.toolChoice = toolChoice
 						for param in configParams {
 							param.apply(to: &request)
 						}
 
-						let response = try await client.complete(request)
+						// Consume SSE stream, accumulating content and tool calls
+						var accumulatedContent = ""
+						var accumulator = ToolCallAccumulator()
+						var finishReason: String?
 
-						guard response.requiresToolExecution,
-							  let toolCalls = response.firstToolCalls, !toolCalls.isEmpty else {
+						for try await delta in client.stream(request) {
+							if let content = delta.firstContent {
+								accumulatedContent += content
+								continuation.yield(.textDelta(content))
+							}
+
+							if let toolCallDeltas = delta.firstToolCallDeltas {
+								for tcd in toolCallDeltas {
+									accumulator.append(tcd)
+								}
+							}
+
+							if let fr = delta.firstFinishReason {
+								finishReason = fr
+							}
+						}
+
+						let toolCalls = accumulator.toolCalls
+
+						guard !toolCalls.isEmpty else {
+							// No tool calls — final response
+							let response = ChatResponse(
+								id: "stream-\(UUID().uuidString)",
+								model: model,
+								content: accumulatedContent,
+								toolCalls: nil,
+								finishReason: finishReason
+							)
 							let result = ToolSessionResult(
 								response: response,
 								messages: currentMessages,
@@ -431,16 +465,17 @@ public struct ToolSession: Sendable {
 							return
 						}
 
-						let assistantContent = response.firstContent
+						// Tool calls accumulated from stream
+						let content: String? = accumulatedContent.isEmpty ? nil : accumulatedContent
 						continuation.yield(.modelResponse(
-							content: assistantContent?.isEmpty == true ? nil : assistantContent,
+							content: content,
 							toolCalls: toolCalls,
 							iteration: iterations
 						))
 
 						currentMessages.append(
 							AssistantToolCallMessage(
-								content: assistantContent?.isEmpty == true ? nil : assistantContent,
+								content: content,
 								toolCalls: toolCalls
 							)
 						)

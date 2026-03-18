@@ -3105,42 +3105,30 @@ struct DeclarativeInitTests {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
 
-        let toolCallResponse = """
-        {
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": "Let me check the weather.",
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "get_weather", "arguments": "{\\"city\\":\\"Paris\\"}"}
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-        }
+        // SSE response with tool call (content + tool_calls)
+        let toolCallSSE = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Let me "},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{"content":"check the weather."},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\\"city\\":\\"Paris\\"}"}}]},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+        data: [DONE]
+
         """
 
-        let textResponse = """
-        {
-            "id": "chatcmpl-2",
-            "object": "chat.completion",
-            "created": 1700000001,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "It's sunny in Paris."},
-                "finish_reason": "stop"
-            }],
-            "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25}
-        }
+        // SSE response with final text
+        let textSSE = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"It's sunny "},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{"content":"in Paris."},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+        data: [DONE]
+
         """
 
         var callCount = 0
@@ -3149,7 +3137,7 @@ struct DeclarativeInitTests {
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
             )!
-            let body = callCount == 1 ? toolCallResponse : textResponse
+            let body = callCount == 1 ? toolCallSSE : textSSE
             return (response, body.data(using: .utf8)!)
         }
 
@@ -3181,8 +3169,11 @@ struct DeclarativeInitTests {
         )
 
         var events: [String] = []
+        var textDeltas: [String] = []
         for try await event in stream {
             switch event {
+            case .textDelta(let text):
+                textDeltas.append(text)
             case .modelResponse(let content, let toolCalls, let iteration):
                 events.append("modelResponse")
                 #expect(content == "Let me check the weather.")
@@ -3200,6 +3191,9 @@ struct DeclarativeInitTests {
             }
         }
 
+        // textDelta events arrive during both iterations
+        #expect(textDeltas == ["Let me ", "check the weather.", "It's sunny ", "in Paris."])
+
         #expect(events == [
             "modelResponse",
             "toolStarted:get_weather",
@@ -3212,26 +3206,22 @@ struct DeclarativeInitTests {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
 
-        let textResponse = """
-        {
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "Hello there!"},
-                "finish_reason": "stop"
-            }],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
-        }
+        let textSSE = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Hello "},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{"content":"there!"},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+        data: [DONE]
+
         """
 
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
             )!
-            return (response, textResponse.data(using: .utf8)!)
+            return (response, textSSE.data(using: .utf8)!)
         }
 
         let client = try LLMClient(
@@ -3259,8 +3249,11 @@ struct DeclarativeInitTests {
         )
 
         var events: [String] = []
+        var textDeltas: [String] = []
         for try await event in stream {
             switch event {
+            case .textDelta(let text):
+                textDeltas.append(text)
             case .completed(let result):
                 events.append("completed")
                 #expect(result.response.firstContent == "Hello there!")
@@ -3270,6 +3263,7 @@ struct DeclarativeInitTests {
             }
         }
 
+        #expect(textDeltas == ["Hello ", "there!"])
         #expect(events == ["completed"])
     }
 
@@ -3277,65 +3271,31 @@ struct DeclarativeInitTests {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
 
-        let toolCallResponse1 = """
-        {
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "step", "arguments": "{\\"n\\": 1}"}
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
-        }
+        let toolCallSSE1 = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"step","arguments":"{\\"n\\": 1}"}}]},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+        data: [DONE]
+
         """
 
-        let toolCallResponse2 = """
-        {
-            "id": "chatcmpl-2",
-            "object": "chat.completion",
-            "created": 1700000001,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_2",
-                        "type": "function",
-                        "function": {"name": "step", "arguments": "{\\"n\\": 2}"}
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-        }
+        let toolCallSSE2 = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_2","type":"function","function":{"name":"step","arguments":"{\\"n\\": 2}"}}]},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+        data: [DONE]
+
         """
 
-        let textResponse = """
-        {
-            "id": "chatcmpl-3",
-            "object": "chat.completion",
-            "created": 1700000002,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "Done after 2 steps."},
-                "finish_reason": "stop"
-            }],
-            "usage": {"prompt_tokens": 15, "completion_tokens": 5, "total_tokens": 20}
-        }
+        let textSSE = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Done after 2 steps."},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+        data: [DONE]
+
         """
 
         var callCount = 0
@@ -3346,9 +3306,9 @@ struct DeclarativeInitTests {
             )!
             let body: String
             switch callCount {
-            case 1: body = toolCallResponse1
-            case 2: body = toolCallResponse2
-            default: body = textResponse
+            case 1: body = toolCallSSE1
+            case 2: body = toolCallSSE2
+            default: body = textSSE
             }
             return (response, body.data(using: .utf8)!)
         }
@@ -3380,6 +3340,8 @@ struct DeclarativeInitTests {
         var events: [String] = []
         for try await event in stream {
             switch event {
+            case .textDelta:
+                break // text deltas not relevant for this test
             case .modelResponse(_, _, let iteration):
                 events.append("modelResponse:\(iteration)")
             case .toolStarted(let name, _):
@@ -3408,34 +3370,20 @@ struct DeclarativeInitTests {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
 
-        let toolCallResponse = """
-        {
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "fail_tool", "arguments": "{}"}
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
-        }
+        let toolCallSSE = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"fail_tool","arguments":"{}"}}]},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+        data: [DONE]
+
         """
 
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
             )!
-            return (response, toolCallResponse.data(using: .utf8)!)
+            return (response, toolCallSSE.data(using: .utf8)!)
         }
 
         let client = try LLMClient(
@@ -3479,34 +3427,20 @@ struct DeclarativeInitTests {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
 
-        let toolCallResponse = """
-        {
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "loop_tool", "arguments": "{}"}
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10}
-        }
+        let toolCallSSE = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"loop_tool","arguments":"{}"}}]},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+        data: [DONE]
+
         """
 
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
             )!
-            return (response, toolCallResponse.data(using: .utf8)!)
+            return (response, toolCallSSE.data(using: .utf8)!)
         }
 
         let client = try LLMClient(
@@ -3548,26 +3482,20 @@ struct DeclarativeInitTests {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
 
-        let textResponse = """
-        {
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "Hi!"},
-                "finish_reason": "stop"
-            }],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
-        }
+        let textSSE = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Hi!"},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+        data: [DONE]
+
         """
 
         MockURLProtocol.requestHandler = { request in
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
             )!
-            return (response, textResponse.data(using: .utf8)!)
+            return (response, textSSE.data(using: .utf8)!)
         }
 
         let client = try LLMClient(
@@ -3606,42 +3534,22 @@ struct DeclarativeInitTests {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [MockURLProtocol.self]
 
-        let toolCallResponse = """
-        {
-            "id": "chatcmpl-1",
-            "object": "chat.completion",
-            "created": 1700000000,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {"name": "add", "arguments": "{\\"a\\": 2, \\"b\\": 3}"}
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-        }
+        let toolCallSSE = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"add","arguments":"{\\"a\\": 2, \\"b\\": 3}"}}]},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+        data: [DONE]
+
         """
 
-        let textResponse = """
-        {
-            "id": "chatcmpl-2",
-            "object": "chat.completion",
-            "created": 1700000001,
-            "model": "gpt-4",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "2 + 3 = 5"},
-                "finish_reason": "stop"
-            }],
-            "usage": {"prompt_tokens": 20, "completion_tokens": 5, "total_tokens": 25}
-        }
+        let textSSE = """
+        data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"2 + 3 = 5"},"finish_reason":null}]}
+
+        data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+        data: [DONE]
+
         """
 
         var callCount = 0
@@ -3650,7 +3558,7 @@ struct DeclarativeInitTests {
             let response = HTTPURLResponse(
                 url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
             )!
-            let body = callCount == 1 ? toolCallResponse : textResponse
+            let body = callCount == 1 ? toolCallSSE : textSSE
             return (response, body.data(using: .utf8)!)
         }
 
@@ -3682,6 +3590,7 @@ struct DeclarativeInitTests {
         var events: [String] = []
         for try await event in stream {
             switch event {
+            case .textDelta: break
             case .modelResponse: events.append("modelResponse")
             case .toolStarted: events.append("toolStarted")
             case .toolCompleted: events.append("toolCompleted")
