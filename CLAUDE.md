@@ -192,6 +192,11 @@ The test suite uses Swift Testing framework and covers:
 - ToolSession stream (basic, no tools needed, multiple iterations, error propagation, max iterations, declarative shorthand)
 - Agent declarative init with @SessionBuilder and run(_:) alias
 - Agent streamSend (basic with tools, no tools, streamRun alias)
+- **Live endpoint tests** (opt-in via `LIVE_TEST=1` env var, skipped by default):
+  - Basic non-streaming completion, streaming completion, tool calling via ToolSession, Agent multi-turn
+  - Configurable via `LIVE_ENDPOINT_URL`, `LIVE_ENDPOINT_MODEL`, `LIVE_ENDPOINT_API_KEY` env vars
+  - Auto-appends `/v1/chat/completions` if URL has no path
+  - Run with: `LIVE_TEST=1 swift test --filter LiveEndpointTests`
 
 ## File Structure
 ```
@@ -205,7 +210,8 @@ Sources/SwiftChatCompletionsDSL/
 │   ├── DSL.md                               # DSL guide for beginners
 │   └── Usage.md                             # Usage examples
 Tests/SwiftChatCompletionsDSLTests/
-├── SwiftChatCompletionsDSLTests.swift      # All test cases (120 tests)
+├── SwiftChatCompletionsDSLTests.swift      # All test cases (136 simulated tests)
+├── LiveEndpointTests.swift                 # Opt-in live endpoint integration tests (4 tests, requires LIVE_TEST=1)
 Spec/
 ├── SwiftChatCompletionsDSL.md              # Core public API specification
 ├── SwiftChatCompletionsDSL-HOW.md          # Core implementation details

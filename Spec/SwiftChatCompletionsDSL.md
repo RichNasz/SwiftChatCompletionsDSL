@@ -683,4 +683,53 @@ These tests validate key DSL behaviors and must pass for the implementation to c
 
 These tests cover essential functionality, errors, and extensibility. Implement additional tests for full coverage if needed.
 
+---
+
+## Live Endpoint Tests (Opt-In)
+
+An optional integration test suite (`LiveEndpointTests.swift`) validates the DSL against a real OpenAI-compatible server. All live tests are **skipped by default** and only run when explicitly enabled via environment variables.
+
+### Configuration
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `LIVE_TEST` | *(unset)* | Set to `1` to enable live tests |
+| `LIVE_ENDPOINT_URL` | `http://127.0.0.1:1234` | Server endpoint URL |
+| `LIVE_ENDPOINT_MODEL` | `nvidia/nemotron-3-nano` | Model identifier |
+| `LIVE_ENDPOINT_API_KEY` | *(empty string)* | API key (local servers typically don't need one) |
+
+### URL Path Handling
+If the supplied URL has no path (or just `/`), `/v1/chat/completions` is appended automatically. URLs with an existing path are used as-is.
+
+### Test Cases
+
+The suite uses `@Suite(.serialized)` and Swift Testing's `.enabled(if:)` trait for opt-in gating:
+
+1. **Basic Non-Streaming Completion** (`basicCompletion`): Sends a simple prompt via `client.complete()`, verifies response has non-empty content and at least one choice. Uses `RequestTimeout(120)` and `ResourceTimeout(180)` for slower local models.
+
+2. **Streaming Completion** (`streamingCompletion`): Streams a response via `client.stream()`, verifies deltas arrive and content accumulates to a non-empty string.
+
+3. **Tool Calling via ToolSession** (`toolCallingWithToolSession`): Defines a `get_current_time` tool with a `timezone` parameter, runs via `ToolSession`, verifies the model calls the tool and produces a final response incorporating the tool result.
+
+4. **Agent Multi-Turn** (`agentMultiTurn`): Creates an `Agent` with a system prompt, sends two messages across turns, verifies non-empty responses and that conversation history grows to at least 4 messages.
+
+### Running
+
+```bash
+# Run with defaults (local LM Studio on port 1234)
+LIVE_TEST=1 swift test --filter LiveEndpointTests
+
+# Run with custom endpoint
+LIVE_TEST=1 LIVE_ENDPOINT_URL=http://other:8080 LIVE_ENDPOINT_MODEL=other-model swift test --filter LiveEndpointTests
+
+# All simulated tests still pass without LIVE_TEST set
+swift test
+```
+
+### Design Principles
+- **No source changes required**: Lives in a separate test file with no modifications to existing code or tests.
+- **No API key required by default**: Designed for local inference servers (e.g., LM Studio, Ollama).
+- **Serialized execution**: Tests run sequentially to avoid overwhelming local servers.
+- **Generous timeouts**: Non-streaming test uses extended timeouts for slower local models.
+
 This spec provides a clear blueprint for an LLM code generator to produce a Swift 6.2+ package, ensuring a declarative, type-safe, and flexible DSL for OpenAI-compatible LLM servers.
