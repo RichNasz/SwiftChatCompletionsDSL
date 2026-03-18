@@ -16,7 +16,7 @@ let package = Package(
 		),
 	],
 	dependencies: [
-		.package(path: "../SwiftLLMToolMacros"),
+		.package(url: "https://github.com/RichNasz/SwiftLLMToolMacros", branch: "main"),
 	],
 	targets: [
 		.target(

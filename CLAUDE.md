@@ -158,7 +158,7 @@ Custom `LLMError` enum covers:
 ### Macros Integration
 - `JSONSchema = JSONSchemaValue` (typealias) — no runtime conversion needed
 - `Tool = ToolDefinition` (typealias) — no runtime conversion needed
-- `AgentTool.init<T: ChatCompletionsTool>(_ instance: T)` wraps macro-defined tools for Agent use (defined in `Agent.swift`)
+- `AgentTool.init<T: LLMTool>(_ instance: T)` wraps macro-defined tools for Agent use (defined in `Agent.swift`)
 
 ### Extensibility
 - Add custom message types by conforming to `ChatMessage`

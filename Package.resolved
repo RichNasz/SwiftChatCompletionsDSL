@@ -1,5 +1,5 @@
 {
-  "originHash" : "0b52ffc32aae443bf6aee0c5e57e2d9205b8fbb12d1eb760e18d3572554b4c63",
+  "originHash" : "9fc957b108eb42e188a2845b28050200cd189f03e00fe54a9c7c786cf015b927",
   "pins" : [
     {
       "identity" : "swift-syntax",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "4799286537280063c85a32f09884cfbca301b1a1",
         "version" : "602.0.0"
+      }
+    },
+    {
+      "identity" : "swiftllmtoolmacros",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/RichNasz/SwiftLLMToolMacros",
+      "state" : {
+        "branch" : "main",
+        "revision" : "12a2623deb4a654ef0c5483daa5660e35407a1f4"
       }
     }
   ],
