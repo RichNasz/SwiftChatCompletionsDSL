@@ -715,12 +715,17 @@ The suite uses `@Suite(.serialized)` and Swift Testing's `.enabled(if:)` trait f
 
 ### Running
 
-```bash
-# Run with defaults (local LM Studio on port 1234)
-LIVE_TEST=1 swift test --filter LiveEndpointTests
+The recommended way to run live tests is via the two-phase script, which ensures all simulated tests pass before hitting a live endpoint:
 
-# Run with custom endpoint
-LIVE_TEST=1 LIVE_ENDPOINT_URL=http://other:8080 LIVE_ENDPOINT_MODEL=other-model swift test --filter LiveEndpointTests
+```bash
+# Two-phase: simulated tests first, then live tests (recommended)
+./scripts/test-live.sh
+
+# With custom endpoint
+LIVE_ENDPOINT_URL=http://other:8080 LIVE_ENDPOINT_MODEL=other-model ./scripts/test-live.sh
+
+# Direct (skip simulated test gate)
+LIVE_TEST=1 swift test --filter LiveEndpointTests
 
 # All simulated tests still pass without LIVE_TEST set
 swift test

@@ -12,6 +12,7 @@ This is a Swift Package Manager project that implements `SwiftChatCompletionsDSL
 - **Build**: `swift build`
 - **Test**: `swift test`
 - **Run tests with verbose output**: `swift test --verbose`
+- **Run live endpoint tests** (two-phase): `./scripts/test-live.sh` — runs all simulated tests first, then live tests only if simulated tests pass. Forwards `LIVE_ENDPOINT_URL`, `LIVE_ENDPOINT_MODEL`, `LIVE_ENDPOINT_API_KEY` env vars.
 
 ### Development
 - **Clean build**: `swift package clean`
@@ -196,7 +197,8 @@ The test suite uses Swift Testing framework and covers:
   - Basic non-streaming completion, streaming completion, tool calling via ToolSession, Agent multi-turn
   - Configurable via `LIVE_ENDPOINT_URL`, `LIVE_ENDPOINT_MODEL`, `LIVE_ENDPOINT_API_KEY` env vars
   - Auto-appends `/v1/chat/completions` if URL has no path
-  - Run with: `LIVE_TEST=1 swift test --filter LiveEndpointTests`
+  - Run with: `./scripts/test-live.sh` (two-phase: simulated first, then live)
+  - Or directly: `LIVE_TEST=1 swift test --filter LiveEndpointTests`
 
 ## File Structure
 ```
@@ -222,6 +224,8 @@ Spec/
 ├── DocumentationSpec.md                     # Documentation requirements
 Examples/
 ├── BasicUsage.swift                         # Usage examples
+scripts/
+├── test-live.sh                             # Two-phase test runner: simulated tests then live tests
 .claude/skills/
 ├── using-swift-llm-tool-macros/     # Macro usage skill for AI assistants
 │   └── SKILL.md
