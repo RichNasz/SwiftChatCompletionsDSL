@@ -202,6 +202,17 @@ The test suite uses Swift Testing framework and covers:
   - Run with: `./scripts/test-live.sh` (two-phase: simulated first, then live)
   - Or directly: `LIVE_TEST=1 swift test --filter LiveEndpointTests`
 
+## Claude Files Policy
+
+Only two kinds of Claude files belong in this repo:
+- `CLAUDE.md` — project-level guidance for Claude Code
+- `.claude/skills/` — shared skills that help AI assistants work with this codebase
+
+Do NOT commit:
+- `.claude/settings.local.json` — contains user-specific permissions; local only
+- Any Claude file with personally identifiable information
+- Any Claude file whose content is specific to one local user's environment
+
 ## File Structure
 ```
 Sources/SwiftChatCompletionsDSL/
